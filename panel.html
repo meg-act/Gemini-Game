@@ -3,33 +3,18 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
-    <title>E531系 グラスコックピット計器パネル | SideCar / 別窓ディスプレイ</title>
+    <title>計器モニタ | SideCar / 別窓ディスプレイ</title>
     <link
       rel="icon"
-      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230056b0'/%3E%3Ctext x='16' y='22' font-family='sans-serif' font-size='14' font-weight='bold' fill='white' text-anchor='middle'%3E531%3C/text%3E%3C/svg%3E"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23232932'/%3E%3Ctext x='16' y='22' font-family='sans-serif' font-size='13' font-weight='bold' fill='white' text-anchor='middle'%3ELCD%3C/text%3E%3C/svg%3E"
     />
     <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700&family=JetBrains+Mono:wght@500;600;700&family=Noto+Sans+JP:wght@500;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,600;0,700;0,800;1,700;1,800&family=JetBrains+Mono:ital,wght@0,700;1,700&family=Noto+Sans+JP:wght@600;700&display=swap"
       rel="stylesheet"
       media="print"
       onload="this.media='all'"
     />
     <style>
-      :root {
-        --console-bg: #15181d;
-        --bezel-bg: #1e232a;
-        --bezel-border: #323a44;
-        --lcd-bg: #0c1015;
-        --text-main: #edf2f7;
-        --text-dim: #8b97a6;
-        --emerald: #00b874;
-        --amber: #f5a623;
-        --red: #e5484d;
-        --blue: #0072ce;
-        --mono: 'JetBrains Mono', ui-monospace, monospace;
-        --sans: 'Noto Sans JP', 'Inter', system-ui, sans-serif;
-      }
-
       * {
         box-sizing: border-box;
         margin: 0;
@@ -42,389 +27,47 @@
       body {
         width: 100%;
         height: 100%;
-        background: var(--console-bg);
-        color: var(--text-main);
-        font-family: var(--sans);
+        background: #0a0d11;
         overflow: hidden;
       }
 
-      .cockpit-shell {
+      .meter-bezel {
         width: 100%;
         height: 100%;
-        display: flex;
-        flex-direction: column;
-        padding: 10px 14px 12px;
-        gap: 10px;
-        background: radial-gradient(circle at 50% 0%, #242a33 0%, #12151a 68%);
-      }
-
-      .panel-topbar {
+        padding: clamp(4px, 1.1vmin, 14px);
+        background: linear-gradient(180deg, #161a20 0%, #0b0e12 100%);
         display: flex;
         align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        padding: 4px 8px;
-        background: rgba(10, 13, 18, 0.72);
-        border: 1px solid var(--bezel-border);
-        border-radius: 8px;
-        flex-shrink: 0;
+        justify-content: center;
       }
 
-      .panel-brand {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        font-size: 0.82rem;
-        font-weight: 700;
-        letter-spacing: 0.05em;
-      }
-
-      .series-pill {
-        padding: 2px 8px;
+      .meter-screen {
+        width: 100%;
+        height: 100%;
+        background: #14181e;
+        border: 2px solid #05070a;
         border-radius: 4px;
-        background: var(--blue);
-        color: #fff;
-        font-family: var(--mono);
-        font-size: 0.74rem;
-      }
-
-      .conn-badge {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        font-size: 0.75rem;
-        color: var(--amber);
-        font-family: var(--mono);
-      }
-      .conn-badge.connected {
-        color: #4ce69e;
-      }
-      .conn-dot {
-        width: 8px;
-        height: 8px;
-        border-radius: 50%;
-        background: currentColor;
-        box-shadow: 0 0 8px currentColor;
-      }
-
-      .panel-actions {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-      }
-
-      .top-btn {
-        padding: 4px 11px;
-        background: rgba(255, 255, 255, 0.07);
-        border: 1px solid rgba(255, 255, 255, 0.16);
-        border-radius: 6px;
-        color: var(--text-main);
-        font-family: var(--sans);
-        font-size: 0.76rem;
-        cursor: pointer;
-      }
-      .top-btn:hover {
-        background: rgba(255, 255, 255, 0.14);
-      }
-
-      /* メイン計器クラスター（左LCD・中央コラム・右TIMS LCD） */
-      .desk-cluster {
-        flex: 1;
-        min-height: 0;
-        display: grid;
-        grid-template-columns: 1.12fr 0.44fr 1.12fr;
-        gap: 12px;
-        align-items: stretch;
-      }
-
-      .lcd-bezel {
-        background: linear-gradient(180deg, #272d36 0%, #1b2027 100%);
-        border: 2px solid #38414d;
-        border-radius: 12px;
-        padding: 10px;
-        display: flex;
-        flex-direction: column;
-        box-shadow: inset 0 2px 6px rgba(255, 255, 255, 0.06), 0 8px 24px rgba(0, 0, 0, 0.55);
-        min-height: 0;
-      }
-
-      .lcd-screen {
-        flex: 1;
-        min-height: 0;
-        background: var(--lcd-bg);
-        border: 2px solid #06080b;
-        border-radius: 7px;
+        box-shadow:
+          inset 0 1px 4px rgba(0, 0, 0, 0.85),
+          0 0 0 1px rgba(255, 255, 255, 0.06);
         overflow: hidden;
         position: relative;
       }
 
-      .lcd-screen canvas {
+      #meter-canvas {
         width: 100%;
         height: 100%;
         display: block;
-      }
-
-      /* 中央コラム（鉄道懐中時計＋停止精度計＋非常ボタン） */
-      .center-column {
-        background: linear-gradient(180deg, #232830 0%, #171b21 100%);
-        border: 2px solid #353d48;
-        border-radius: 12px;
-        padding: 10px 8px;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: space-between;
-        gap: 8px;
-        min-height: 0;
-      }
-
-      .watch-wrap {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        gap: 4px;
-      }
-      #watch-canvas {
-        width: min(124px, 16vh);
-        height: min(124px, 16vh);
-      }
-      .watch-digital {
-        font-family: var(--mono);
-        font-size: 0.86rem;
-        color: #ffd588;
-        letter-spacing: 0.08em;
-      }
-
-      .stop-gauge-box {
-        width: 100%;
-        padding: 8px 10px;
-        background: #0d1117;
-        border: 1px solid #2d3540;
-        border-radius: 8px;
-        text-align: center;
-      }
-      .stop-gauge-label {
-        font-size: 0.68rem;
-        color: var(--text-dim);
-        letter-spacing: 0.04em;
-      }
-      .stop-gauge-val {
-        font-family: var(--mono);
-        font-size: 1.05rem;
-        font-weight: 700;
-        color: #f6f9fc;
-        margin: 2px 0 6px;
-      }
-      .stop-track {
-        height: 8px;
-        border-radius: 4px;
-        background: #1e252f;
-        position: relative;
-        overflow: hidden;
-      }
-      .stop-center-mark {
-        position: absolute;
-        left: 50%;
-        top: 0;
-        bottom: 0;
-        width: 2px;
-        background: #4ce69e;
-        transform: translateX(-50%);
-      }
-      .stop-pin {
-        position: absolute;
-        top: 0;
-        bottom: 0;
-        width: 8px;
-        border-radius: 3px;
-        background: #ff9f2e;
-        transform: translateX(-50%);
-        left: 0%;
-        transition: left 0.06s linear;
-      }
-
-      .eb-mushroom-btn {
-        width: 78px;
-        height: 78px;
-        border-radius: 50%;
-        border: 4px solid #444b55;
-        background: radial-gradient(circle at 35% 30%, #ff6b6b 0%, #c81e24 62%, #7d0c11 100%);
-        color: #ffffff;
-        font-family: var(--sans);
-        font-size: 0.85rem;
-        font-weight: 700;
-        letter-spacing: 0.05em;
-        cursor: pointer;
-        box-shadow: 0 6px 16px rgba(0, 0, 0, 0.55), inset 0 2px 4px rgba(255, 255, 255, 0.35);
-      }
-      .eb-mushroom-btn:active {
-        transform: translateY(2px) scale(0.97);
-      }
-
-      /* 下部：SideCar タッチ操作対応 ワンハンドルマスコンバー ＆ クイック操作 */
-      .touch-console {
-        flex-shrink: 0;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        padding: 8px 12px;
-        background: rgba(12, 15, 20, 0.88);
-        border: 1px solid var(--bezel-border);
-        border-radius: 10px;
-        flex-wrap: wrap;
-      }
-
-      .touch-notch-strip {
-        display: flex;
-        align-items: center;
-        gap: 4px;
-        flex: 1;
-        min-width: 300px;
-      }
-
-      .t-notch {
-        flex: 1;
-        min-width: 28px;
-        height: 36px;
-        border-radius: 6px;
-        border: 1px solid rgba(255, 255, 255, 0.14);
-        background: rgba(255, 255, 255, 0.06);
-        color: var(--text-dim);
-        font-family: var(--mono);
-        font-size: 0.78rem;
-        font-weight: 700;
-        cursor: pointer;
-        transition: background 0.1s, color 0.1s, border-color 0.1s;
-      }
-      .t-notch.type-eb.active {
-        background: #d92d20;
-        border-color: #ff8a80;
-        color: #fff;
-      }
-      .t-notch.type-brake.active {
-        background: #d97706;
-        border-color: #fcd34d;
-        color: #fff;
-      }
-      .t-notch.type-neutral.active {
-        background: #475467;
-        border-color: #cbd5e1;
-        color: #fff;
-      }
-      .t-notch.type-power.active {
-        background: #009e5c;
-        border-color: #5eead4;
-        color: #fff;
-      }
-
-      .touch-actions {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-      }
-
-      .t-act-btn {
-        height: 36px;
-        padding: 0 13px;
-        border-radius: 6px;
-        border: 1px solid rgba(255, 255, 255, 0.18);
-        background: rgba(255, 255, 255, 0.08);
-        color: var(--text-main);
-        font-family: var(--sans);
-        font-size: 0.78rem;
-        font-weight: 600;
-        cursor: pointer;
-      }
-      .t-act-btn:hover {
-        background: rgba(255, 255, 255, 0.16);
-      }
-      .t-act-btn.active-amber {
-        background: rgba(245, 166, 35, 0.25);
-        border-color: rgba(255, 206, 86, 0.8);
-        color: #ffe39b;
-      }
-      .t-act-btn.active-green {
-        background: rgba(0, 184, 116, 0.25);
-        border-color: rgba(80, 230, 165, 0.8);
-        color: #c8ffe6;
-      }
-
-      @media (max-width: 900px) {
-        .desk-cluster {
-          grid-template-columns: 1fr 1fr;
-        }
-        .center-column {
-          display: none;
-        }
+        cursor: default;
       }
     </style>
   </head>
   <body>
-    <div class="cockpit-shell">
-      <header class="panel-topbar">
-        <div class="panel-brand">
-          <span class="series-pill">E531系</span>
-          <span>グラスコックピット計器パネル · SideCar / 外部ディスプレイ</span>
-          <span id="conn-badge" class="conn-badge">
-            <span class="conn-dot"></span>
-            <span id="conn-text">メイン画面と接続待機中...</span>
-          </span>
-        </div>
-        <div class="panel-actions">
-          <button type="button" id="btn-panel-fullscreen" class="top-btn">全画面表示</button>
-        </div>
-      </header>
-
-      <main class="desk-cluster">
-        <!-- 左画面：E531系 主メータLCD（速度計・BC/MR圧力計・架線電圧/電流計・戸閉/ATS-P） -->
-        <section class="lcd-bezel" aria-label="主メータディスプレイ">
-          <div class="lcd-screen">
-            <canvas id="meter-canvas"></canvas>
-          </div>
-        </section>
-
-        <!-- 中央コラム：鉄道懐中時計・停止目標精度・緊急ブレーキボタン -->
-        <aside class="center-column" aria-label="中央計器コラム">
-          <div class="watch-wrap">
-            <canvas id="watch-canvas" width="240" height="240"></canvas>
-            <div class="watch-digital" id="watch-digital">17:05:00</div>
-          </div>
-
-          <div class="stop-gauge-box">
-            <div class="stop-gauge-label" id="stop-station-label">次停車: 三河島</div>
-            <div class="stop-gauge-val" id="stop-dist-val">1,200 m</div>
-            <div class="stop-track">
-              <div class="stop-center-mark"></div>
-              <div class="stop-pin" id="stop-pin"></div>
-            </div>
-          </div>
-
-          <button type="button" id="btn-eb-mushroom" class="eb-mushroom-btn" title="非常ブレーキ投入">
-            緊急<br />EB
-          </button>
-        </aside>
-
-        <!-- 右画面：E531系 TIMS モニタ（路線採時表・10両編成状態図・勾配/区間） -->
-        <section class="lcd-bezel" aria-label="TIMS車両情報モニタ">
-          <div class="lcd-screen">
-            <canvas id="tims-canvas"></canvas>
-          </div>
-        </section>
-      </main>
-
-      <!-- 下部：タッチ＆マウスでそのまま運転できるワンハンドルマスコン・クイック操作バー -->
-      <footer class="touch-console">
-        <div class="touch-notch-strip" id="touch-notch-strip" aria-label="ワンハンドルマスコン操作"></div>
-        <div class="touch-actions">
-          <button type="button" id="pbtn-melody" class="t-act-btn">発車メロディ</button>
-          <button type="button" id="pbtn-doors" class="t-act-btn">扉閉</button>
-          <button type="button" id="pbtn-horn" class="t-act-btn">警笛</button>
-          <button type="button" id="pbtn-world" class="t-act-btn">ザ・ワールド</button>
-        </div>
-      </footer>
-    </div>
-
+    <main class="meter-bezel" aria-label="運転台 計器モニタ">
+      <div class="meter-screen">
+        <canvas id="meter-canvas"></canvas>
+      </div>
+    </main>
     <script type="module" src="./src/panel.js"></script>
   </body>
 </html>

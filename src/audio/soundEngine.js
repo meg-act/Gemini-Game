@@ -728,7 +728,27 @@ export class TrainSoundEngine {
   }
 
   /**
-   * 駅ホーム天井PAスピーカー残響付き 発車メロディ再生（4駅オリジナルJR東日本風フレーズ）
+   * 駅IDに対応する実在発車メロディ曲名を返す（下り：日暮里→三河島→南千住→北千住）
+   */
+  getMelodyTitle(stationId = 'nippori') {
+    switch (stationId) {
+      case 'nippori':
+        return '線路の彼方';
+      case 'mikawashima':
+      case 'minamisenju':
+        return 'JRE-IKST-013-02';
+      case 'kitasenju':
+        return '陽だまり V2';
+      default:
+        return '線路の彼方';
+    }
+  }
+
+  /**
+   * 駅ホーム天井PAスピーカー残響付き 実在駅発車メロディ再生
+   *   - 日暮里 (4番線)   : 『線路の彼方』（櫻井隆仁 / テイチク FMエレピ＋クリスタルベル）
+   *   - 三河島・南千住   : 『JRE-IKST-013-02』（F#メジャー BPM132 新汎用ビブラフォンベル＋伴奏）
+   *   - 北千住 (1番線)   : 『陽だまり V2』（井出正彦 / ユニペックス オルゴールチェレスタ＋V2温もりパッド）
    */
   stopDepartureMelody() {
     for (const stopFn of this._melodyStoppers) {
@@ -746,96 +766,385 @@ export class TrainSoundEngine {
     if (!this.isInitialized || !this.ctx || this.isMuted || this.isTimeStopped) return;
     this.stopDepartureMelody();
 
-    const now = this.ctx.currentTime + 0.03;
-    // MIDI番号→周波数変換
+    const now = this.ctx.currentTime + 0.035;
     const mtof = (m) => 440 * Math.pow(2, (m - 69) / 12);
-
-    // JR東日本らしい爽やかで明るいベル・エレピ調の駅別オリジナル発車メロディ
-    const melodies = {
-      // 日暮里：朝の光が差し込む爽快アルペジオ（Gメジャー）
-      nippori: [
-        [79, 0.00, 0.24], [83, 0.18, 0.24], [86, 0.36, 0.28], [91, 0.56, 0.45],
-        [88, 0.92, 0.24], [86, 1.12, 0.24], [83, 1.32, 0.34], [81, 1.60, 0.34],
-        [79, 1.92, 0.24], [81, 2.12, 0.24], [83, 2.32, 0.26], [86, 2.54, 0.38],
-        [91, 2.88, 0.72], [86, 2.88, 0.72], [83, 2.88, 0.72],
-      ],
-      // 三河島：優しく弾むダウンタウン・チャイム（Fメジャー）
-      mikawashima: [
-        [77, 0.00, 0.24], [81, 0.20, 0.24], [84, 0.40, 0.28], [86, 0.64, 0.42],
-        [84, 1.00, 0.24], [81, 1.20, 0.24], [79, 1.40, 0.36],
-        [81, 1.78, 0.24], [84, 1.98, 0.24], [89, 2.20, 0.68], [84, 2.20, 0.68], [81, 2.20, 0.68],
-      ],
-      // 南千住：隅田川の風を感じる伸びやかなフレーズ（Ebメジャー）
-      minamisenju: [
-        [75, 0.00, 0.28], [79, 0.22, 0.28], [82, 0.44, 0.32], [87, 0.70, 0.48],
-        [86, 1.12, 0.26], [82, 1.34, 0.26], [80, 1.56, 0.38],
-        [79, 1.92, 0.24], [82, 2.14, 0.26], [87, 2.38, 0.78], [82, 2.38, 0.78], [79, 2.38, 0.78],
-      ],
-      // 北千住：ターミナルらしい華やかな終着・発車ベル（Cメジャー）
-      kitasenju: [
-        [76, 0.00, 0.22], [79, 0.18, 0.22], [84, 0.36, 0.26], [88, 0.56, 0.36],
-        [86, 0.88, 0.22], [84, 1.06, 0.22], [83, 1.24, 0.26], [79, 1.48, 0.36],
-        [81, 1.82, 0.22], [83, 2.00, 0.22], [84, 2.18, 0.24], [88, 2.40, 0.32],
-        [91, 2.68, 0.85], [84, 2.68, 0.85], [79, 2.68, 0.85],
-      ],
-    };
-
-    const seq = melodies[stationId] || melodies.nippori;
-    this.isMelodyPlaying = true;
     let maxEnd = 0;
 
-    for (const [midi, offset, dur] of seq) {
+    // 音色別のポリフォニック発音ヘルパー（すべて駅ホームPAスピーカーEQ＋残響へ送出）
+    const scheduleVoice = (midi, offset, dur, patch = 'ep', vel = 1.0) => {
       const t0 = now + offset;
       const freq = mtof(midi);
       maxEnd = Math.max(maxEnd, offset + dur);
 
-      // FMベル＋エレクトリックピアノ倍音（JR駅メロ特有のキラキラした音色）
-      const carrier = this.ctx.createOscillator();
-      carrier.type = 'sine';
-      carrier.frequency.setValueAtTime(freq, t0);
-
-      const mod = this.ctx.createOscillator();
-      mod.type = 'sine';
-      mod.frequency.setValueAtTime(freq * 2.0, t0);
-      const modGain = this.ctx.createGain();
-      modGain.gain.setValueAtTime(freq * 1.35, t0);
-      modGain.gain.exponentialRampToValueAtTime(1.0, t0 + dur * 0.65);
-
-      const overtone = this.ctx.createOscillator();
-      overtone.type = 'triangle';
-      overtone.frequency.setValueAtTime(freq * 0.5, t0);
-
       const noteGain = this.ctx.createGain();
-      noteGain.gain.setValueAtTime(0.0008, t0);
-      noteGain.gain.linearRampToValueAtTime(0.115, t0 + 0.012);
-      noteGain.gain.exponentialRampToValueAtTime(0.0008, t0 + dur + 0.28);
-
-      const subGain = this.ctx.createGain();
-      subGain.gain.value = 0.26;
-
-      mod.connect(modGain);
-      modGain.connect(carrier.frequency);
-      carrier.connect(noteGain);
-      overtone.connect(subGain);
-      subGain.connect(noteGain);
       noteGain.connect(this.paInput);
 
-      carrier.start(t0);
-      mod.start(t0);
-      overtone.start(t0);
-      carrier.stop(t0 + dur + 0.34);
-      mod.stop(t0 + dur + 0.34);
-      overtone.stop(t0 + dur + 0.34);
+      const oscs = [];
+      if (patch === 'sakurai_lead' || patch === 'ikst_lead') {
+        // DX7風 2オペレータFMクリスタルベル＋エレピ倍音
+        const isIkst = patch === 'ikst_lead';
+        const carrier = this.ctx.createOscillator();
+        carrier.type = 'sine';
+        carrier.frequency.setValueAtTime(freq, t0);
 
+        const mod = this.ctx.createOscillator();
+        mod.type = 'sine';
+        mod.frequency.setValueAtTime(freq * (isIkst ? 3.0 : 2.0), t0);
+
+        const modGain = this.ctx.createGain();
+        modGain.gain.setValueAtTime(freq * (isIkst ? 1.55 : 1.35), t0);
+        modGain.gain.exponentialRampToValueAtTime(freq * 0.08, t0 + Math.max(0.08, dur * 0.68));
+
+        const bodyOsc = this.ctx.createOscillator();
+        bodyOsc.type = 'triangle';
+        bodyOsc.frequency.setValueAtTime(freq, t0);
+        const bodyG = this.ctx.createGain();
+        bodyG.gain.value = isIkst ? 0.30 : 0.24;
+
+        mod.connect(modGain);
+        modGain.connect(carrier.frequency);
+        carrier.connect(noteGain);
+        bodyOsc.connect(bodyG);
+        bodyG.connect(noteGain);
+
+        const peak = 0.115 * vel;
+        noteGain.gain.setValueAtTime(0.0006, t0);
+        noteGain.gain.linearRampToValueAtTime(peak, t0 + 0.010);
+        noteGain.gain.exponentialRampToValueAtTime(0.0006, t0 + dur + 0.26);
+
+        oscs.push(carrier, mod, bodyOsc);
+      } else if (patch === 'celesta_v2') {
+        // ユニペックス『陽だまり V2』特有の澄んだオルゴール・チェレスタ音色（基音＋4倍音チャイム）
+        const c1 = this.ctx.createOscillator();
+        c1.type = 'sine';
+        c1.frequency.setValueAtTime(freq, t0);
+
+        const c2 = this.ctx.createOscillator();
+        c2.type = 'sine';
+        c2.frequency.setValueAtTime(freq * 4.0, t0);
+        const c2G = this.ctx.createGain();
+        c2G.gain.setValueAtTime(0.22, t0);
+        c2G.gain.exponentialRampToValueAtTime(0.001, t0 + 0.14);
+
+        const c3 = this.ctx.createOscillator();
+        c3.type = 'triangle';
+        c3.frequency.setValueAtTime(freq * 2.0, t0);
+        const c3G = this.ctx.createGain();
+        c3G.gain.setValueAtTime(0.14, t0);
+        c3G.gain.exponentialRampToValueAtTime(0.002, t0 + dur * 0.55);
+
+        c1.connect(noteGain);
+        c2.connect(c2G);
+        c2G.connect(noteGain);
+        c3.connect(c3G);
+        c3G.connect(noteGain);
+
+        const peak = 0.118 * vel;
+        noteGain.gain.setValueAtTime(0.0006, t0);
+        noteGain.gain.linearRampToValueAtTime(peak, t0 + 0.008);
+        noteGain.gain.exponentialRampToValueAtTime(0.0006, t0 + dur + 0.38);
+
+        oscs.push(c1, c2, c3);
+      } else if (patch === 'warm_pad') {
+        // V2特有の包み込むコーラス・ストリングスパッド
+        const lp = this.ctx.createBiquadFilter();
+        lp.type = 'lowpass';
+        lp.frequency.value = 1350;
+        lp.connect(noteGain);
+
+        for (const det of [-6, 6]) {
+          const o = this.ctx.createOscillator();
+          o.type = 'sawtooth';
+          o.frequency.setValueAtTime(freq, t0);
+          o.detune.value = det;
+          o.connect(lp);
+          oscs.push(o);
+        }
+        const peak = 0.026 * vel;
+        noteGain.gain.setValueAtTime(0.0005, t0);
+        noteGain.gain.linearRampToValueAtTime(peak, t0 + Math.min(0.18, dur * 0.3));
+        noteGain.gain.setValueAtTime(peak * 0.88, t0 + Math.max(0.19, dur - 0.12));
+        noteGain.gain.exponentialRampToValueAtTime(0.0005, t0 + dur + 0.35);
+      } else if (patch === 'ep_chord') {
+        // 伴奏用ソフトFMエレクトリックピアノ
+        const c = this.ctx.createOscillator();
+        c.type = 'sine';
+        c.frequency.setValueAtTime(freq, t0);
+        const m = this.ctx.createOscillator();
+        m.type = 'sine';
+        m.frequency.setValueAtTime(freq * 2.0, t0);
+        const mg = this.ctx.createGain();
+        mg.gain.setValueAtTime(freq * 0.55, t0);
+        mg.gain.exponentialRampToValueAtTime(1.0, t0 + dur * 0.45);
+        m.connect(mg);
+        mg.connect(c.frequency);
+        c.connect(noteGain);
+
+        const peak = 0.044 * vel;
+        noteGain.gain.setValueAtTime(0.0005, t0);
+        noteGain.gain.linearRampToValueAtTime(peak, t0 + 0.012);
+        noteGain.gain.exponentialRampToValueAtTime(0.0005, t0 + dur + 0.20);
+        oscs.push(c, m);
+      } else if (patch === 'bass') {
+        // 駅メロの土台を支えるクリーン・エレクトリックベース
+        const b = this.ctx.createOscillator();
+        b.type = 'triangle';
+        b.frequency.setValueAtTime(freq, t0);
+        const sub = this.ctx.createOscillator();
+        sub.type = 'sine';
+        sub.frequency.setValueAtTime(freq, t0);
+        b.connect(noteGain);
+        sub.connect(noteGain);
+
+        const peak = 0.058 * vel;
+        noteGain.gain.setValueAtTime(0.0008, t0);
+        noteGain.gain.linearRampToValueAtTime(peak, t0 + 0.014);
+        noteGain.gain.exponentialRampToValueAtTime(0.0008, t0 + dur + 0.12);
+        oscs.push(b, sub);
+      }
+
+      const stopAt = t0 + dur + 0.44;
+      for (const o of oscs) {
+        o.start(t0);
+        o.stop(stopAt);
+      }
       this._melodyStoppers.push(() => {
         noteGain.gain.cancelScheduledValues(this.ctx.currentTime);
-        noteGain.gain.setTargetAtTime(0.0001, this.ctx.currentTime, 0.03);
+        noteGain.gain.setTargetAtTime(0.0001, this.ctx.currentTime, 0.025);
       });
+    };
+
+    const scheduleChord = (midis, offset, dur, patch = 'ep_chord', vel = 0.85) => {
+      for (const m of midis) {
+        scheduleVoice(m, offset, dur, patch, vel);
+      }
+    };
+
+    if (stationId === 'mikawashima' || stationId === 'minamisenju') {
+      // =====================================================================
+      // 三河島・南千住（常磐線下り）：『JRE-IKST-013-02』
+      // 実曲データ：Key = F# Major, BPM = 132 (8分音符 e = 0.2273s)
+      // コード進行：| F# (3拍) F#dim (1拍) | F# | G#m/B (2拍) C#7(13) (2拍) | D (2拍) E (2拍) | F# |
+      // =====================================================================
+      const e = 60 / 132 / 2; // 0.22727s
+
+      // リード旋律（軽快に弾むビブラフォン・ベル音色、語尾高音 -02 バリエーション）
+      const lead = [
+        // Bar 1: F# -> F#dim
+        [70, 0 * e, 1.0 * e], // A#5
+        [71, 1 * e, 1.0 * e], // B5
+        [73, 2 * e, 1.9 * e], // C#6
+        [70, 4 * e, 1.0 * e], // A#5
+        [66, 5 * e, 1.0 * e], // F#5
+        [69, 6 * e, 1.0 * e], // A5  (F#dim!)
+        [72, 7 * e, 1.0 * e], // C6  (F#dim!)
+        // Bar 2: F#
+        [70, 8 * e, 1.0 * e],  // A#5
+        [73, 9 * e, 1.0 * e],  // C#6
+        [78, 10 * e, 2.2 * e], // F#6
+        [75, 12 * e, 1.0 * e], // D#6
+        [73, 13 * e, 1.0 * e], // C#6
+        [70, 14 * e, 1.9 * e], // A#5
+        // Bar 3: G#m/B -> C#7(13)
+        [71, 16 * e, 1.0 * e], // B5
+        [73, 17 * e, 1.0 * e], // C#6
+        [75, 18 * e, 1.0 * e], // D#6
+        [71, 19 * e, 1.0 * e], // B5
+        [70, 20 * e, 1.0 * e], // A#5 (13th of C#7!)
+        [68, 21 * e, 1.0 * e], // G#5
+        [70, 22 * e, 1.0 * e], // A#5
+        [73, 23 * e, 1.0 * e], // C#6
+        // Bar 4: D -> E (特徴的な ♭VI -> ♭VII モーダル進行！)
+        [74, 24 * e, 1.9 * e], // D6
+        [69, 26 * e, 1.0 * e], // A5
+        [74, 27 * e, 1.0 * e], // D6
+        [76, 28 * e, 1.9 * e], // E6
+        [71, 30 * e, 1.0 * e], // B5
+        [76, 31 * e, 1.0 * e], // E6
+        // Bar 5: F# (-02 高音フィニッシュ)
+        [78, 32 * e, 5.2 * e], // F#6
+        [73, 32 * e, 5.0 * e], // C#6 ハモリ
+      ];
+      for (const [m, off, d] of lead) {
+        scheduleVoice(m, off, d, 'ikst_lead', 1.0);
+      }
+
+      // 伴奏コード＆ベース
+      // Bar 1: F# (6e) -> F#dim (2e)
+      scheduleVoice(54, 0 * e, 5.8 * e, 'bass', 0.95);
+      scheduleChord([61, 66, 70], 0 * e, 2.8 * e, 'ep_chord', 0.85);
+      scheduleChord([61, 66, 70], 3 * e, 2.8 * e, 'ep_chord', 0.78);
+      scheduleVoice(54, 6 * e, 1.9 * e, 'bass', 0.95);
+      scheduleChord([60, 63, 69], 6 * e, 1.9 * e, 'ep_chord', 0.90); // F#dim
+      // Bar 2: F#
+      scheduleVoice(54, 8 * e, 3.8 * e, 'bass', 0.95);
+      scheduleVoice(49, 12 * e, 3.8 * e, 'bass', 0.90);
+      scheduleChord([61, 66, 70], 8 * e, 3.8 * e, 'ep_chord', 0.82);
+      scheduleChord([61, 66, 70], 12 * e, 3.8 * e, 'ep_chord', 0.80);
+      // Bar 3: G#m/B -> C#7(13)
+      scheduleVoice(47, 16 * e, 3.8 * e, 'bass', 0.95); // B2
+      scheduleChord([59, 63, 68], 16 * e, 3.8 * e, 'ep_chord', 0.85);
+      scheduleVoice(49, 20 * e, 3.8 * e, 'bass', 0.95); // C#3
+      scheduleChord([59, 65, 70], 20 * e, 3.8 * e, 'ep_chord', 0.88); // B-E#-A# (C#13)
+      // Bar 4: D -> E
+      scheduleVoice(50, 24 * e, 3.8 * e, 'bass', 1.0); // D3
+      scheduleChord([62, 66, 69], 24 * e, 3.8 * e, 'ep_chord', 0.92);
+      scheduleVoice(52, 28 * e, 3.8 * e, 'bass', 1.0); // E3
+      scheduleChord([64, 68, 71], 28 * e, 3.8 * e, 'ep_chord', 0.95);
+      // Bar 5: F# 解決アルペジオ
+      scheduleVoice(42, 32 * e, 5.5 * e, 'bass', 1.0);
+      scheduleChord([58, 61, 66, 70], 32 * e, 5.5 * e, 'ep_chord', 0.92);
+    } else if (stationId === 'kitasenju') {
+      // =====================================================================
+      // 北千住（1番線 下り）：『陽だまり V2』（井出正彦 / ユニペックス）
+      // 実曲旋律（Fメジャー / ♭1個）：
+      //   ソラ｜シ♭ー レ ラ ソ ファ ソー｜ラーーー ソラ｜シ♭ー レ ラ ソ ファ ソー｜ファー (ミー ファ〜)
+      // V2特有の温かいストリングスパッド＋透明なオルゴール・チェレスタ！
+      // =====================================================================
+      const e = 60 / 108 / 2; // 0.2778s
+
+      // リード旋律（オルゴール・チェレスタ）
+      const lead = [
+        // アウフタクト「ソ・ラ」
+        [79, 0 * e, 1.0 * e], // G5
+        [81, 1 * e, 1.0 * e], // A5
+        // Bar 1「シ♭ー レ ラ ソ ファ ソー」
+        [82, 2 * e, 2.0 * e], // Bb5
+        [86, 4 * e, 1.0 * e], // D6
+        [81, 5 * e, 1.0 * e], // A5
+        [79, 6 * e, 1.0 * e], // G5
+        [77, 7 * e, 1.0 * e], // F5
+        [79, 8 * e, 2.0 * e], // G5
+        // Bar 2「ラーーー ソ・ラ」
+        [81, 10 * e, 5.8 * e], // A5
+        [79, 16 * e, 1.0 * e], // G5
+        [81, 17 * e, 1.0 * e], // A5
+        // Bar 3「シ♭ー レ ラ ソ ファ ソー」
+        [82, 18 * e, 2.0 * e], // Bb5
+        [86, 20 * e, 1.0 * e], // D6
+        [81, 21 * e, 1.0 * e], // A5
+        [79, 22 * e, 1.0 * e], // G5
+        [77, 23 * e, 1.0 * e], // F5
+        [79, 24 * e, 2.0 * e], // G5
+        // Bar 4「ファー (ミー ファ〜)」V2の優しい余韻終止
+        [77, 26 * e, 3.0 * e], // F5
+        [76, 29 * e, 1.2 * e], // E5
+        [77, 30.2 * e, 5.5 * e], // F5
+      ];
+      for (const [m, off, d] of lead) {
+        scheduleVoice(m, off, d, 'celesta_v2', 1.0);
+      }
+
+      // V2 コーラス・ウォームパッド＆アルペジオ伴奏
+      // Bar 1: Gm7 -> C7
+      scheduleVoice(55, 2 * e, 4.0 * e, 'bass', 0.80);
+      scheduleChord([62, 65, 70], 2 * e, 4.0 * e, 'warm_pad', 0.95);
+      scheduleVoice(48, 6 * e, 4.0 * e, 'bass', 0.80);
+      scheduleChord([60, 64, 70], 6 * e, 4.0 * e, 'warm_pad', 0.95);
+      // Bar 2: FM7 -> Dm7
+      scheduleVoice(53, 10 * e, 4.0 * e, 'bass', 0.82);
+      scheduleChord([60, 64, 69], 10 * e, 4.0 * e, 'warm_pad', 0.95);
+      scheduleVoice(65, 11 * e, 1.5 * e, 'ep_chord', 0.65);
+      scheduleVoice(69, 12 * e, 1.5 * e, 'ep_chord', 0.65);
+      scheduleVoice(72, 13 * e, 2.2 * e, 'ep_chord', 0.65);
+      scheduleVoice(50, 14 * e, 4.0 * e, 'bass', 0.80);
+      scheduleChord([60, 65, 69], 14 * e, 4.0 * e, 'warm_pad', 0.90);
+      // Bar 3: Gm7 -> C7sus4 / C7
+      scheduleVoice(55, 18 * e, 4.0 * e, 'bass', 0.82);
+      scheduleChord([62, 65, 70], 18 * e, 4.0 * e, 'warm_pad', 0.95);
+      scheduleVoice(48, 22 * e, 4.0 * e, 'bass', 0.85);
+      scheduleChord([60, 64, 67, 70], 22 * e, 4.0 * e, 'warm_pad', 0.95);
+      // Bar 4: FM7 アルペジオ＆V2余韻パッド
+      scheduleVoice(53, 26 * e, 9.2 * e, 'bass', 0.88);
+      scheduleChord([60, 65, 69, 72], 26 * e, 9.2 * e, 'warm_pad', 1.0);
+      scheduleVoice(65, 30.5 * e, 4.5 * e, 'celesta_v2', 0.52);
+      scheduleVoice(69, 31.2 * e, 4.0 * e, 'celesta_v2', 0.52);
+      scheduleVoice(72, 31.9 * e, 3.6 * e, 'celesta_v2', 0.56);
+      scheduleVoice(84, 32.6 * e, 3.2 * e, 'celesta_v2', 0.48);
+    } else {
+      // =====================================================================
+      // 日暮里（4番線 常磐線下り）：『線路の彼方』（櫻井隆仁 / テイチク）
+      // 長距離列車の旅立ちを彩る名曲：Cメジャー カノン順次下降進行
+      // (C -> G/B -> Am7 -> Em7/G -> F -> C/E -> Dm7 -> G7sus4 - G7 -> Cadd9)
+      // =====================================================================
+      const e = 60 / 124 / 2; // 0.2419s
+
+      // 冒頭のきらめくクリスタルベル装飾＋伸びやかな主旋律
+      const lead = [
+        // キラキラ上昇ピックアップ
+        [74, 0.0 * e, 0.5 * e], // D6
+        [76, 0.5 * e, 0.5 * e], // E6
+        [79, 1.0 * e, 1.0 * e], // G6
+        // Bar 1: C -> G/B
+        [76, 2.0 * e, 2.8 * e], // E6
+        [74, 5.0 * e, 1.0 * e], // D6
+        [72, 6.0 * e, 2.0 * e], // C6
+        [71, 8.0 * e, 1.0 * e], // B5
+        [74, 9.0 * e, 1.0 * e], // D6
+        // Bar 2: Am7 -> Em7/G
+        [72, 10.0 * e, 2.8 * e], // C6
+        [71, 13.0 * e, 1.0 * e], // B5
+        [67, 14.0 * e, 2.0 * e], // G5
+        [64, 16.0 * e, 1.0 * e], // E5
+        [67, 17.0 * e, 1.0 * e], // G5
+        // Bar 3: F -> C/E
+        [69, 18.0 * e, 2.0 * e], // A5
+        [72, 20.0 * e, 1.0 * e], // C6
+        [69, 21.0 * e, 1.0 * e], // A5
+        [67, 22.0 * e, 2.8 * e], // G5
+        [64, 25.0 * e, 1.0 * e], // E5
+        // Bar 4: Dm7 -> G7sus4 - G7
+        [65, 26.0 * e, 1.0 * e], // F5
+        [67, 27.0 * e, 1.0 * e], // G5
+        [69, 28.0 * e, 1.5 * e], // A5
+        [72, 29.5 * e, 0.5 * e], // C6
+        [74, 30.0 * e, 2.0 * e], // D6 (G7sus4 -> G7)
+        [71, 32.0 * e, 1.0 * e], // B5
+        [74, 33.0 * e, 1.0 * e], // D6
+        // Bar 5: Cadd9 終止
+        [72, 34.0 * e, 5.2 * e], // C6
+      ];
+      for (const [m, off, d] of lead) {
+        scheduleVoice(m, off, d, 'sakurai_lead', 1.0);
+      }
+
+      // 櫻井作品特有の8分音符エレピ分散和音＋順次下降ベースライン
+      const accomp = [
+        // C (t = 2e..6e)
+        { bass: 48, t: 2 * e, notes: [60, 64, 67, 64] },
+        // G/B (t = 6e..10e)
+        { bass: 47, t: 6 * e, notes: [59, 62, 67, 62] },
+        // Am7 (t = 10e..14e)
+        { bass: 45, t: 10 * e, notes: [60, 64, 67, 64] },
+        // Em7/G (t = 14e..18e)
+        { bass: 43, t: 14 * e, notes: [59, 64, 67, 64] },
+        // F (t = 18e..22e)
+        { bass: 41, t: 18 * e, notes: [60, 65, 69, 65] },
+        // C/E (t = 22e..26e)
+        { bass: 40, t: 22 * e, notes: [60, 64, 67, 64] },
+        // Dm7 (t = 26e..30e)
+        { bass: 38, t: 26 * e, notes: [60, 65, 69, 65] },
+        // G7sus4 -> G7 (t = 30e..34e)
+        { bass: 43, t: 30 * e, notes: [60, 65, 67, 59] },
+      ];
+      for (const bar of accomp) {
+        scheduleVoice(bar.bass, bar.t, 3.9 * e, 'bass', 0.92);
+        bar.notes.forEach((n, idx) => {
+          scheduleVoice(n, bar.t + idx * e, 1.4 * e, 'ep_chord', 0.82);
+        });
+      }
+      // 最終 Cadd9 コード＋きらめきベルアルペジオ
+      scheduleVoice(48, 34 * e, 5.5 * e, 'bass', 0.98);
+      scheduleChord([60, 62, 64, 67], 34 * e, 5.5 * e, 'ep_chord', 0.88);
+      scheduleVoice(74, 34.6 * e, 3.8 * e, 'sakurai_lead', 0.55); // D6
+      scheduleVoice(76, 35.2 * e, 3.5 * e, 'sakurai_lead', 0.55); // E6
+      scheduleVoice(79, 35.8 * e, 3.2 * e, 'sakurai_lead', 0.62); // G6
     }
 
+    this.isMelodyPlaying = true;
     const doneTimer = setTimeout(() => {
       this.isMelodyPlaying = false;
-    }, (maxEnd + 0.45) * 1000);
+    }, (maxEnd + 0.5) * 1000);
     this._melodyStoppers.push(() => clearTimeout(doneTimer));
   }
 
