@@ -12,6 +12,7 @@ import {
   createExitTransferSignTexture,
   createItvMonitorTexture,
   createVendingMachineTexture,
+  createUrbanSignageTexture,
 } from './textures.js';
 import { RollingStockFactory } from '../train/rollingStock.js';
 
@@ -29,6 +30,379 @@ function mulberry32(seed) {
 }
 
 /**
+ * 複数の BufferGeometry を 1 つの BufferGeometry に結合する軽量ヘルパー
+ */
+function mergeBufferGeos(geos) {
+  let totalVerts = 0;
+  let totalIndices = 0;
+  for (const g of geos) {
+    totalVerts += g.attributes.position.count;
+    totalIndices += g.index ? g.index.count : g.attributes.position.count;
+  }
+
+  const pos = new Float32Array(totalVerts * 3);
+  const norm = new Float32Array(totalVerts * 3);
+  const uv = new Float32Array(totalVerts * 2);
+  const idx = new Uint32Array(totalIndices);
+
+  let vOff = 0;
+  let iOff = 0;
+  for (const g of geos) {
+    const pAttr = g.attributes.position;
+    const nAttr = g.attributes.normal;
+    const uAttr = g.attributes.uv;
+    const vCount = pAttr.count;
+
+    pos.set(pAttr.array, vOff * 3);
+    if (nAttr) norm.set(nAttr.array, vOff * 3);
+    if (uAttr) uv.set(uAttr.array, vOff * 2);
+
+    if (g.index) {
+      const gIdx = g.index.array;
+      for (let i = 0; i < gIdx.length; i++) {
+        idx[iOff + i] = gIdx[i] + vOff;
+      }
+      iOff += gIdx.length;
+    } else {
+      for (let i = 0; i < vCount; i++) {
+        idx[iOff + i] = vOff + i;
+      }
+      iOff += vCount;
+    }
+    vOff += vCount;
+  }
+
+  const out = new THREE.BufferGeometry();
+  out.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  out.setAttribute('normal', new THREE.BufferAttribute(norm, 3));
+  out.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  out.setIndex(new THREE.BufferAttribute(idx, 1));
+  return out;
+}
+
+/**
+ * 屋上面 (+Y / -Y) を非発光コンクリート防水UV領域 (v = 0.92..0.99) に割り当てた建築用ボックス
+ */
+function createCleanRoofBoxGeo(
+  w,
+  h,
+  d,
+  cx = 0,
+  cy = h * 0.5,
+  cz = 0,
+  { uRepeatX = 1, uRepeatZ = 1, vMin = 0.0, vMax = 0.90 } = {}
+) {
+  const geo = new THREE.BoxGeometry(w, h, d);
+  geo.translate(cx, cy, cz);
+  const uvAttr = geo.attributes.uv;
+
+  // BoxGeometry の面順: 0:+X, 1:-X, 2:+Y(屋上), 3:-Y(底面), 4:+Z, 5:-Z
+  for (let face = 0; face < 6; face++) {
+    const base = face * 4;
+    if (face === 2 || face === 3) {
+      uvAttr.setXY(base + 0, 0.08, 0.99);
+      uvAttr.setXY(base + 1, 0.92, 0.99);
+      uvAttr.setXY(base + 2, 0.08, 0.92);
+      uvAttr.setXY(base + 3, 0.92, 0.92);
+    } else {
+      const uRep = face < 2 ? uRepeatZ : uRepeatX;
+      uvAttr.setXY(base + 0, 0.0, vMax);
+      uvAttr.setXY(base + 1, uRep, vMax);
+      uvAttr.setXY(base + 2, 0.0, vMin);
+      uvAttr.setXY(base + 3, uRep, vMin);
+    }
+  }
+  uvAttr.needsUpdate = true;
+  return geo;
+}
+
+/**
+ * 多様な都市建築シルエットの単位ジオメトリ群（すべて底面 y = 0 基準、1×1×1 正規化）
+ */
+function createBuildingSilhouetteTemplates() {
+  // 0: パラペット立ち上がり縁付きフラットルーフビル（凹んだ防水屋上スラブが見える！）
+  const pw = 0.045;
+  const parapetBlock = mergeBufferGeos([
+    createCleanRoofBoxGeo(1.0, 0.955, 1.0, 0, 0.4775, 0, { vMin: 0.0, vMax: 0.895 }),
+    createCleanRoofBoxGeo(1.0, 0.045, pw, 0, 0.9775, 0.5 - pw * 0.5, { vMin: 0.885, vMax: 0.91 }),
+    createCleanRoofBoxGeo(1.0, 0.045, pw, 0, 0.9775, -0.5 + pw * 0.5, { vMin: 0.885, vMax: 0.91 }),
+    createCleanRoofBoxGeo(pw, 0.045, 1.0 - pw * 2, 0.5 - pw * 0.5, 0.9775, 0, { vMin: 0.885, vMax: 0.91 }),
+    createCleanRoofBoxGeo(pw, 0.045, 1.0 - pw * 2, -0.5 + pw * 0.5, 0.9775, 0, { vMin: 0.885, vMax: 0.91 }),
+  ]);
+
+  // 1: 東京特有の斜線制限3段セットバックマンション・雑居ビル（ルーフバルコニー段差！）
+  const setbackStep = mergeBufferGeos([
+    createCleanRoofBoxGeo(1.0, 0.54, 1.0, 0, 0.27, 0, { vMin: 0.0, vMax: 0.51 }),
+    createCleanRoofBoxGeo(0.80, 0.27, 0.82, -0.07, 0.675, -0.06, { vMin: 0.51, vMax: 0.75 }),
+    createCleanRoofBoxGeo(0.58, 0.19, 0.64, -0.14, 0.905, -0.11, { vMin: 0.75, vMax: 0.90 }),
+  ]);
+
+  // 2: L字型ウイング＋突出エレベーター塔付き分譲マンション
+  const lWingMansion = mergeBufferGeos([
+    createCleanRoofBoxGeo(1.0, 0.96, 0.52, 0, 0.48, 0.22, { vMin: 0.0, vMax: 0.895 }),
+    createCleanRoofBoxGeo(0.48, 0.88, 0.48, -0.26, 0.44, -0.26, { vMin: 0.11, vMax: 0.895 }),
+    createCleanRoofBoxGeo(0.22, 1.06, 0.22, -0.12, 0.53, -0.02, { vMin: 0.15, vMax: 0.905 }),
+  ]);
+
+  // 3: 外階段・エレベーターシャフト2本が突出した大型UR団地・板状集合住宅
+  const twinCoreSlab = mergeBufferGeos([
+    createCleanRoofBoxGeo(1.0, 0.96, 0.78, 0, 0.48, -0.05, {
+      uRepeatX: 2,
+      uRepeatZ: 1,
+      vMin: 0.0,
+      vMax: 0.895,
+    }),
+    createCleanRoofBoxGeo(0.15, 1.04, 0.20, -0.26, 0.52, 0.42, { vMin: 0.11, vMax: 0.905 }),
+    createCleanRoofBoxGeo(0.15, 1.04, 0.20, 0.26, 0.52, 0.42, { vMin: 0.11, vMax: 0.905 }),
+  ]);
+
+  // 4: 駅前・幹線道路沿いの細身ペンシル商業雑居ビル（1階庇＋側面階段コア＋塔屋）
+  const pencilCommercial = mergeBufferGeos([
+    createCleanRoofBoxGeo(0.88, 0.93, 0.94, -0.04, 0.465, 0, { vMin: 0.0, vMax: 0.895 }),
+    createCleanRoofBoxGeo(0.24, 1.02, 0.36, 0.36, 0.51, -0.24, { vMin: 0.12, vMax: 0.905 }),
+    createCleanRoofBoxGeo(0.96, 0.028, 1.04, -0.02, 0.115, 0.02, { vMin: 0.89, vMax: 0.91 }),
+  ]);
+
+  // 5: 勾配屋根（切妻・寄棟・片流れ・のこぎり屋根）を載せる下町戸建て・アパート・町工場ボディ
+  const lowRiseBody = createCleanRoofBoxGeo(1.0, 1.0, 1.0, 0, 0.5, 0, { vMin: 0.0, vMax: 0.89 });
+
+  // 6: 1階ビルトインガレージ凹み＋2・3階オーバーハングの現代都市型3階建て住宅ボディ
+  const steppedHouseBody = mergeBufferGeos([
+    createCleanRoofBoxGeo(0.86, 0.35, 0.88, -0.04, 0.175, -0.04, { vMin: 0.0, vMax: 0.34 }),
+    createCleanRoofBoxGeo(1.0, 0.65, 1.0, 0, 0.675, 0, { vMin: 0.34, vMax: 0.89 }),
+  ]);
+
+  // 円筒・多角柱の屋上/底面キャップUVを非発光コンクリート領域へリマップするヘルパー
+  const makeCleanPrism = (rTop, rBot, h, segs, cx, cy, cz, { uRep = 2, vMin = 0.11, vMax = 0.895 } = {}) => {
+    const g = new THREE.CylinderGeometry(rTop, rBot, h, segs, 1, false);
+    g.translate(cx, cy, cz);
+    const nAttr = g.attributes.normal;
+    const uAttr = g.attributes.uv;
+    for (let i = 0; i < uAttr.count; i++) {
+      if (Math.abs(nAttr.getY(i)) > 0.75) {
+        uAttr.setXY(i, 0.5, 0.95);
+      } else {
+        const u = uAttr.getX(i);
+        const v = uAttr.getY(i);
+        uAttr.setXY(i, u * uRep, vMin + v * (vMax - vMin));
+      }
+    }
+    uAttr.needsUpdate = true;
+    return g;
+  };
+
+  // 7: アール壁面・円筒カーテンウォールタワー＋低層角型商業ポディウム（都会的な曲線ビル！）
+  const cylinderTower = mergeBufferGeos([
+    createCleanRoofBoxGeo(0.98, 0.20, 0.98, 0, 0.10, 0, { vMin: 0.0, vMax: 0.26 }),
+    makeCleanPrism(0.45, 0.45, 0.75, 18, 0, 0.575, 0, { uRep: 2, vMin: 0.12, vMax: 0.895 }),
+    makeCleanPrism(0.30, 0.32, 0.06, 16, 0, 0.97, 0, { uRep: 1, vMin: 0.82, vMax: 0.905 }),
+  ]);
+
+  // 8: 交差点隅切り8角形シャフト＋段付きクラウンの近代オフィス・商業ビル
+  const chamferCrown = mergeBufferGeos([
+    makeCleanPrism(0.52, 0.52, 0.84, 8, 0, 0.42, 0, { uRep: 2, vMin: 0.0, vMax: 0.86 }),
+    makeCleanPrism(0.37, 0.44, 0.16, 8, 0, 0.92, 0, { uRep: 2, vMin: 0.76, vMax: 0.905 }),
+  ]);
+
+  // 9: 共通商業基壇の上に高さの異なる非対称ツインタワーが載る複合再開発ビル
+  const twinPodium = mergeBufferGeos([
+    createCleanRoofBoxGeo(1.0, 0.22, 1.0, 0, 0.11, 0, { vMin: 0.0, vMax: 0.28 }),
+    createCleanRoofBoxGeo(0.43, 0.78, 0.84, -0.26, 0.61, 0, { vMin: 0.12, vMax: 0.895 }),
+    createCleanRoofBoxGeo(0.43, 0.58, 0.80, 0.26, 0.51, -0.02, { vMin: 0.12, vMax: 0.895 }),
+  ]);
+
+  // 10: コの字型（両翼ウイング＋中央コートヤード）中層マンション・オフィスビル
+  const courtyardUBlock = mergeBufferGeos([
+    createCleanRoofBoxGeo(1.0, 0.96, 0.38, 0, 0.48, -0.31, { vMin: 0.0, vMax: 0.895 }),
+    createCleanRoofBoxGeo(0.34, 0.92, 0.62, -0.33, 0.46, 0.19, { vMin: 0.11, vMax: 0.895 }),
+    createCleanRoofBoxGeo(0.34, 0.92, 0.62, 0.33, 0.46, 0.19, { vMin: 0.11, vMax: 0.895 }),
+  ]);
+
+  return {
+    parapetBlock,
+    setbackStep,
+    lWingMansion,
+    twinCoreSlab,
+    pencilCommercial,
+    lowRiseBody,
+    steppedHouseBody,
+    cylinderTower,
+    chamferCrown,
+    twinPodium,
+    courtyardUBlock,
+  };
+}
+
+/**
+ * 勾配屋根ジオメトリ生成ヘルパー（切妻・寄棟・片流れ・町工場のこぎり屋根、すべて外向き法線＆軒出付き）
+ */
+function buildSolidMeshFromQuadsAndTris(builders) {
+  const pos = [];
+  const uv = [];
+  const idx = [];
+  const pushQuad = (a, b, c, d) => {
+    const base = pos.length / 3;
+    pos.push(...a, ...b, ...c, ...d);
+    uv.push(0, 0, 1, 0, 1, 1, 0, 1);
+    idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+  };
+  const pushTri = (a, b, c) => {
+    const base = pos.length / 3;
+    pos.push(...a, ...b, ...c);
+    uv.push(0, 0, 1, 0, 0.5, 1);
+    idx.push(base, base + 1, base + 2);
+  };
+  builders(pushQuad, pushTri);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  return g;
+}
+
+function createPitchedRoofTemplates() {
+  // 0: 切妻屋根 (Gable Roof)
+  const gable = buildSolidMeshFromQuadsAndTris((quad, tri) => {
+    const x = 0.55;
+    const z = 0.55;
+    const h = 1.0;
+    quad([x, 0, z], [x, 0, -z], [0, h, -z], [0, h, z]); // 右流れ面
+    quad([-x, 0, -z], [-x, 0, z], [0, h, z], [0, h, -z]); // 左流れ面
+    tri([-x, 0, z], [x, 0, z], [0, h, z]); // 前妻壁
+    tri([x, 0, -z], [-x, 0, -z], [0, h, -z]); // 後妻壁
+    quad([-x, 0, -z], [x, 0, -z], [x, 0, z], [-x, 0, z]); // 軒裏
+  });
+
+  // 1: 寄棟屋根 (Hipped Roof)
+  const hip = buildSolidMeshFromQuadsAndTris((quad, tri) => {
+    const x = 0.56;
+    const z = 0.56;
+    const rz = 0.22;
+    const h = 1.0;
+    quad([x, 0, z], [x, 0, -z], [0, h, -rz], [0, h, rz]);
+    quad([-x, 0, -z], [-x, 0, z], [0, h, rz], [0, h, -rz]);
+    tri([-x, 0, z], [x, 0, z], [0, h, rz]);
+    tri([x, 0, -z], [-x, 0, -z], [0, h, -rz]);
+    quad([-x, 0, -z], [x, 0, -z], [x, 0, z], [-x, 0, z]);
+  });
+
+  // 2: 片流れ屋根 (Modern Asymmetric Shed Roof — 都内狭小3階建て住宅の定番！)
+  const shed = buildSolidMeshFromQuadsAndTris((quad) => {
+    const x = 0.54;
+    const z = 0.54;
+    const hLow = 0.12;
+    const hHigh = 1.0;
+    quad([-x, hLow, z], [x, hHigh, z], [x, hHigh, -z], [-x, hLow, -z]); // 傾斜屋根上面
+    quad([x, 0, z], [x, 0, -z], [x, hHigh, -z], [x, hHigh, z]); // 高側壁
+    quad([-x, 0, -z], [-x, 0, z], [-x, hLow, z], [-x, hLow, -z]); // 低側軒先
+    quad([-x, 0, z], [x, 0, z], [x, hHigh, z], [-x, hLow, z]); // 前側面
+    quad([x, 0, -z], [-x, 0, -z], [-x, hLow, -z], [x, hHigh, -z]); // 後側面
+    quad([-x, 0, -z], [x, 0, -z], [x, 0, z], [-x, 0, z]); // 底面
+  });
+
+  // 3: 2連のこぎり屋根 (Sawtooth Factory Roof — 荒川・三河島・南千住の町工場・倉庫！)
+  const sawtooth = buildSolidMeshFromQuadsAndTris((quad, tri) => {
+    const z = 0.53;
+    const spans = [
+      [-0.53, 0.0],
+      [0.0, 0.53],
+    ];
+    for (const [x0, x1] of spans) {
+      const peakX = x1 - 0.08;
+      const h = 1.0;
+      quad([x0, 0, z], [peakX, h, z], [peakX, h, -z], [x0, 0, -z]); // 緩勾配スレート面
+      quad([x1, 0, z], [x1, 0, -z], [peakX, h, -z], [peakX, h, z]); // 急勾配採光窓面
+      tri([x0, 0, z], [x1, 0, z], [peakX, h, z]);
+      tri([x1, 0, -z], [x0, 0, -z], [peakX, h, -z]);
+    }
+    quad([-0.53, 0, -z], [0.53, 0, -z], [0.53, 0, z], [-0.53, 0, z]);
+  });
+
+  return { gable, hip, shed, sawtooth };
+}
+
+/**
+ * 昭和・平成マンション・雑居ビル屋上の名物「高架水槽（FRP貯水タンク＋鉄骨架台）」＆「大型空調室外機群」
+ */
+function createWaterTankGeo() {
+  const parts = [];
+  for (const lx of [-0.34, 0.34]) {
+    for (const lz of [-0.34, 0.34]) {
+      const leg = new THREE.BoxGeometry(0.08, 0.38, 0.08);
+      leg.translate(lx, 0.19, lz);
+      parts.push(leg);
+    }
+  }
+  const frame = new THREE.BoxGeometry(0.84, 0.06, 0.84);
+  frame.translate(0, 0.38, 0);
+  parts.push(frame);
+
+  const tank = new THREE.BoxGeometry(0.78, 0.52, 0.78);
+  tank.translate(0, 0.67, 0);
+  parts.push(tank);
+
+  const hatch = new THREE.CylinderGeometry(0.16, 0.18, 0.08, 8);
+  hatch.translate(0.14, 0.97, 0.12);
+  parts.push(hatch);
+
+  return mergeBufferGeos(parts);
+}
+
+function createHvacClusterGeo() {
+  const parts = [];
+  const unitA = new THREE.BoxGeometry(0.46, 0.72, 0.88);
+  unitA.translate(-0.26, 0.36, 0);
+  parts.push(unitA);
+
+  const unitB = new THREE.BoxGeometry(0.46, 0.72, 0.88);
+  unitB.translate(0.26, 0.36, 0);
+  parts.push(unitB);
+
+  for (const fx of [-0.26, 0.26]) {
+    const fan = new THREE.CylinderGeometry(0.17, 0.19, 0.14, 8);
+    fan.translate(fx, 0.79, 0.16);
+    parts.push(fan);
+    const fan2 = new THREE.CylinderGeometry(0.17, 0.19, 0.14, 8);
+    fan2.translate(fx, 0.79, -0.20);
+    parts.push(fan2);
+  }
+  return mergeBufferGeos(parts);
+}
+
+/**
+ * 8種サインアトラスの特定セル (0..7) にUVマッピングされた内照式看板ジオメトリ（袖看板・屋上広告塔共用）
+ */
+function createSignCellGeo(cellIdx) {
+  const geo = new THREE.BoxGeometry(1, 1, 1);
+  const col = cellIdx % 4;
+  const row = Math.floor(cellIdx / 4);
+  const u0 = col * 0.25 + 0.005;
+  const u1 = (col + 1) * 0.25 - 0.005;
+  // CanvasTexture flipY=true のため row=0(上段) が v=0.5..1.0, row=1(下段) が v=0.0..0.5
+  const v0 = row === 0 ? 0.505 : 0.005;
+  const v1 = row === 0 ? 0.995 : 0.495;
+
+  const uvAttr = geo.attributes.uv;
+  for (let face = 0; face < 6; face++) {
+    const base = face * 4;
+    if (face === 2 || face === 3) {
+      uvAttr.setXY(base + 0, u0, v1);
+      uvAttr.setXY(base + 1, u0 + 0.02, v1);
+      uvAttr.setXY(base + 2, u0, v1 - 0.02);
+      uvAttr.setXY(base + 3, u0 + 0.02, v1 - 0.02);
+    } else {
+      uvAttr.setXY(base + 0, u0, v1);
+      uvAttr.setXY(base + 1, u1, v1);
+      uvAttr.setXY(base + 2, u0, v0);
+      uvAttr.setXY(base + 3, u1, v0);
+    }
+  }
+  uvAttr.needsUpdate = true;
+  return geo;
+}
+
+/**
  * JR常磐線（日暮里〜北千住）高密度現代駅構造物・実物配線施設・沿線ランドマーク・E531/E231対向列車
  */
 export class ScenerySystem {
@@ -42,6 +416,7 @@ export class ScenerySystem {
     this.rollingStock = new RollingStockFactory();
 
     this.buildingMaterials = [];
+    this.signageMaterial = null;
     this.obstructionLights = [];
     this.waterMaterial = null;
     this.oncomingTrains = [];
@@ -59,7 +434,10 @@ export class ScenerySystem {
 
   setWindowGlowMultiplier(mult) {
     for (const mat of this.buildingMaterials) {
-      mat.emissiveIntensity = 1.35 * mult;
+      if (mat) mat.emissiveIntensity = 1.35 * mult;
+    }
+    if (this.signageMaterial) {
+      this.signageMaterial.emissiveIntensity = 0.42 + 1.05 * mult;
     }
   }
 
@@ -1077,22 +1455,39 @@ export class ScenerySystem {
       g.add(hill);
     }
 
-    // 9. 日暮里東口ランドマーク「ステーションガーデンタワー（40階建て超高層タワー）」
+    // 9. 日暮里東口ランドマーク「ステーションガーデンタワー（商業基壇部＋40階建てタワー＋屋上塔屋クラウン）」
     {
       const f = this.route.getFrameAt(25);
       const r = new THREE.Vector3().crossVectors(f.tangent, WORLD_UP).normalize();
-      const towerMat = this._getOrCreateBuildingMaterial(1);
-      const tower = new THREE.Mesh(new THREE.BoxGeometry(32, 138, 34), towerMat);
-      tower.position.copy(f.position).addScaledVector(r, 48);
-      tower.position.y = 69;
+      const q = new THREE.Quaternion().setFromRotationMatrix(
+        new THREE.Matrix4().makeBasis(r, WORLD_UP, f.tangent.clone().negate())
+      );
+      const towerGeo = mergeBufferGeos([
+        createCleanRoofBoxGeo(40, 22, 42, 0, 11, 0, { uRepeatX: 2, uRepeatZ: 2, vMin: 0.0, vMax: 0.32 }),
+        createCleanRoofBoxGeo(30, 108, 32, 0, 76, 0, { uRepeatX: 2, uRepeatZ: 2, vMin: 0.12, vMax: 0.895 }),
+        createCleanRoofBoxGeo(22, 9, 24, 0, 134.5, 0, { vMin: 0.80, vMax: 0.905 }),
+      ]);
+      const tower = new THREE.Mesh(towerGeo, this._getOrCreateBuildingMaterial(3));
+      tower.quaternion.copy(q);
+      tower.position.copy(f.position).addScaledVector(r, 50);
+      tower.position.y = 0;
       g.add(tower);
 
-      const subTower = new THREE.Mesh(
-        new THREE.BoxGeometry(26, 98, 28),
-        this._getOrCreateBuildingMaterial(2)
-      );
-      subTower.position.copy(f.position).addScaledVector(r, 46).addScaledVector(f.tangent, 46);
-      subTower.position.y = 49;
+      const bMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(3.2, 0.12, 0.08) });
+      const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.6, 8, 8), bMat);
+      beacon.position.set(tower.position.x, 140.4, tower.position.z);
+      g.add(beacon);
+      this.obstructionLights.push({ mat: bMat, phase: 0.5 });
+
+      const subGeo = mergeBufferGeos([
+        createCleanRoofBoxGeo(32, 18, 34, 0, 9, 0, { uRepeatX: 2, uRepeatZ: 2, vMin: 0.0, vMax: 0.30 }),
+        createCleanRoofBoxGeo(25, 76, 27, 0, 56, 0, { uRepeatX: 2, uRepeatZ: 2, vMin: 0.12, vMax: 0.895 }),
+        createCleanRoofBoxGeo(14, 6, 16, 0, 97, 0, { vMin: 0.82, vMax: 0.905 }),
+      ]);
+      const subTower = new THREE.Mesh(subGeo, this._getOrCreateBuildingMaterial(2));
+      subTower.quaternion.copy(q);
+      subTower.position.copy(f.position).addScaledVector(r, 48).addScaledVector(f.tangent, 48);
+      subTower.position.y = 0;
       g.add(subTower);
     }
 
@@ -1260,7 +1655,7 @@ export class ScenerySystem {
       g.add(bridge);
     }
 
-    // 西口：ルミネ北千住 + 北千住マルイ（ミルディス）
+    // 西口：ルミネ北千住 + 北千住マルイ（ミルディスI番館）
     {
       const kf = this.route.getFrameAt(5140);
       const kr = new THREE.Vector3().crossVectors(kf.tangent, WORLD_UP).normalize();
@@ -1268,26 +1663,29 @@ export class ScenerySystem {
         new THREE.Matrix4().makeBasis(kr, WORLD_UP, kf.tangent.clone().negate())
       );
 
-      const lumine = new THREE.Mesh(
-        new THREE.BoxGeometry(26, 42, 108),
-        this._getOrCreateBuildingMaterial(2)
-      );
+      const lumineGeo = mergeBufferGeos([
+        createCleanRoofBoxGeo(26, 38, 108, 0, 19, 0, { uRepeatX: 1, uRepeatZ: 4, vMin: 0.0, vMax: 0.895 }),
+        createCleanRoofBoxGeo(18, 5.5, 42, -2, 40.75, -14, { uRepeatX: 1, uRepeatZ: 2, vMin: 0.78, vMax: 0.905 }),
+      ]);
+      const lumine = new THREE.Mesh(lumineGeo, this._getOrCreateBuildingMaterial(2));
       lumine.quaternion.copy(kq);
       lumine.position.copy(kf.position).addScaledVector(kr, -23.5);
-      lumine.position.y = 21;
+      lumine.position.y = 0;
       g.add(lumine);
 
-      // 北千住マルイ（さらに西側の大型ベージュ・ガラス商業ビル＋赤いサインアクセント）
-      const marui = new THREE.Mesh(
-        new THREE.BoxGeometry(38, 56, 78),
-        this._getOrCreateBuildingMaterial(1)
-      );
+      // 北千住マルイ（ミルディス：低層百貨店基壇＋セットバック高層棟＋赤い0101サインアクセント）
+      const maruiGeo = mergeBufferGeos([
+        createCleanRoofBoxGeo(40, 32, 82, 0, 16, 0, { uRepeatX: 2, uRepeatZ: 3, vMin: 0.0, vMax: 0.56 }),
+        createCleanRoofBoxGeo(32, 24, 66, -2, 44, 4, { uRepeatX: 2, uRepeatZ: 2, vMin: 0.50, vMax: 0.895 }),
+        createCleanRoofBoxGeo(16, 6, 26, -3, 59, 4, { vMin: 0.80, vMax: 0.905 }),
+      ]);
+      const marui = new THREE.Mesh(maruiGeo, this._getOrCreateBuildingMaterial(3));
       marui.quaternion.copy(kq);
       marui.position
         .copy(kf.position)
         .addScaledVector(kr, -62)
         .addScaledVector(kf.tangent, 35);
-      marui.position.y = 28;
+      marui.position.y = 0;
       g.add(marui);
 
       const maruiSign = new THREE.Mesh(
@@ -1297,7 +1695,7 @@ export class ScenerySystem {
       maruiSign.quaternion.copy(kq);
       maruiSign.position
         .copy(kf.position)
-        .addScaledVector(kr, -42.5)
+        .addScaledVector(kr, -45.5)
         .addScaledVector(kf.tangent, 35);
       maruiSign.position.y = 48;
       g.add(maruiSign);
@@ -1680,33 +2078,61 @@ export class ScenerySystem {
       this.group.add(freightGirder);
     }
 
-    // 三河島駅前ランドマーク「アトラスブランズタワー三河島（34階建て）」
+    // 三河島駅前ランドマーク「アトラスブランズタワー三河島（商業基壇＋34階建てレジデンス＋塔屋）」
     {
       const mf = this.route.getFrameAt(1185);
       const mr = new THREE.Vector3().crossVectors(mf.tangent, WORLD_UP).normalize();
-      const atlas = new THREE.Mesh(
-        new THREE.BoxGeometry(28, 112, 28),
-        this._getOrCreateBuildingMaterial(1)
+      const mq = new THREE.Quaternion().setFromRotationMatrix(
+        new THREE.Matrix4().makeBasis(mr, WORLD_UP, mf.tangent.clone().negate())
       );
-      atlas.position.copy(mf.position).addScaledVector(mr, -34);
-      atlas.position.y = 56;
+      const atlasGeo = mergeBufferGeos([
+        createCleanRoofBoxGeo(34, 15, 34, 0, 7.5, 0, { uRepeatX: 2, uRepeatZ: 2, vMin: 0.0, vMax: 0.28 }),
+        createCleanRoofBoxGeo(26, 92, 26, 0, 61, 0, { uRepeatX: 2, uRepeatZ: 2, vMin: 0.12, vMax: 0.895 }),
+        createCleanRoofBoxGeo(16, 7, 16, 0, 110.5, 0, { vMin: 0.80, vMax: 0.905 }),
+      ]);
+      const atlas = new THREE.Mesh(atlasGeo, this._getOrCreateBuildingMaterial(1));
+      atlas.quaternion.copy(mq);
+      atlas.position.copy(mf.position).addScaledVector(mr, -35);
+      atlas.position.y = 0;
       this.group.add(atlas);
+
+      const abMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(3.2, 0.12, 0.08) });
+      const abeacon = new THREE.Mesh(new THREE.SphereGeometry(0.55, 8, 8), abMat);
+      abeacon.position.set(atlas.position.x, 115.4, atlas.position.z);
+      this.group.add(abeacon);
+      this.obstructionLights.push({ mat: abMat, phase: 1.8 });
     }
 
-    // 南千住東口・汐入リバーサイド超高層ツインタワーマンション群 (d=3480..3760m 右手)
-    for (const [sd, sLat, sH] of [
-      [3490, 56, 128],
-      [3590, 64, 134],
-      [3710, 52, 118],
+    // 南千住東口・汐入リバーサイド超高層タワーマンション群 (d=3480..3760m 右手：各棟異なる意匠とシルエット！)
+    for (const [sd, sLat, sH, matIdx, rotOff] of [
+      [3490, 56, 128, 0, 0.08],
+      [3595, 68, 136, 3, -0.14],
+      [3715, 54, 118, 1, 0.22],
     ]) {
       const sf = this.route.getFrameAt(sd);
       const sr = new THREE.Vector3().crossVectors(sf.tangent, WORLD_UP).normalize();
-      const shioiriTower = new THREE.Mesh(
-        new THREE.BoxGeometry(30, sH, 32),
-        this._getOrCreateBuildingMaterial(0)
+      const sq = new THREE.Quaternion().setFromRotationMatrix(
+        new THREE.Matrix4().makeBasis(sr, WORLD_UP, sf.tangent.clone().negate())
       );
+      const towerGeo = mergeBufferGeos([
+        createCleanRoofBoxGeo(36, 14, 38, 0, 7, 0, { uRepeatX: 2, uRepeatZ: 2, vMin: 0.0, vMax: 0.26 }),
+        createCleanRoofBoxGeo(29, sH - 21, 26, 0, 14 + (sH - 21) * 0.5, 2, {
+          uRepeatX: 2,
+          uRepeatZ: 2,
+          vMin: 0.11,
+          vMax: 0.895,
+        }),
+        createCleanRoofBoxGeo(16, sH - 30, 14, -6, 14 + (sH - 30) * 0.5, -12, {
+          vMin: 0.11,
+          vMax: 0.895,
+        }),
+        createCleanRoofBoxGeo(17, 7, 17, 0, sH - 3.5, 1, { vMin: 0.80, vMax: 0.905 }),
+      ]);
+      const shioiriTower = new THREE.Mesh(towerGeo, this._getOrCreateBuildingMaterial(matIdx));
+      shioiriTower.quaternion.copy(sq);
+      shioiriTower.rotateY(rotOff);
       shioiriTower.position.copy(sf.position).addScaledVector(sr, sLat);
-      shioiriTower.position.y = sH * 0.5;
+      shioiriTower.position.y = 0;
       this.group.add(shioiriTower);
 
       const bMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(3.2, 0.12, 0.08) });
@@ -1832,110 +2258,591 @@ export class ScenerySystem {
   }
 
   _getOrCreateBuildingMaterial(variantIdx) {
-    if (this.buildingMaterials[variantIdx]) return this.buildingMaterials[variantIdx];
-    const v = this.textures.buildingFacades[variantIdx];
+    const safeIdx = variantIdx % this.textures.buildingFacades.length;
+    if (this.buildingMaterials[safeIdx]) return this.buildingMaterials[safeIdx];
+    const v = this.textures.buildingFacades[safeIdx];
+    const isCurtain = safeIdx === 2 || safeIdx === 10 || safeIdx === 11;
     const mat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
       map: v.map,
       emissive: new THREE.Color(0xffffff),
       emissiveMap: v.emissiveMap,
-      emissiveIntensity: 1.5,
+      emissiveIntensity: 1.45,
       roughnessMap: v.roughnessMap,
-      roughness: 0.9,
-      metalness: 0.25,
-      envMapIntensity: 1.15,
+      roughness: 0.92,
+      metalness: isCurtain ? 0.42 : 0.18,
+      envMapIntensity: isCurtain ? 1.50 : 1.08,
     });
-    this.buildingMaterials[variantIdx] = mat;
+    this.buildingMaterials[safeIdx] = mat;
     return mat;
   }
 
   /**
-   * 変化に富んだ下町低層住宅・中層マンション・商業ビル群（ランドマーク・駅複合施設との干渉を自動回避）
+   * 沿線エリア特性（駅前繁華街・下町密集住宅街・町工場地帯・リバーサイド再開発・UR団地）に応じた
+   * 超多様な東京下町〜城東エリア都市建築ジェネレーター：
+   * - 12種の建築ファサード × 11種の3D建築シルエット（パラペット・斜線セットバック・L字/コの字マンション・円筒アールタワー・隅切り8角ビル・ツインタワー基壇・UR外階段棟・ペンシル雑居・切妻/寄棟/片流れ住宅・のこぎり屋根町工場）
+   * - 屋上設備（高架水槽FRPタンク・空調室外機チラー・エレベーター塔屋）
+   * - 駅前・商業ビルの突き出し袖看板＆屋上広告塔ネオンサイン
    */
   _buildCityscape() {
-    const rng = mulberry32(202611);
-    const buckets = [[], [], []];
-    const roofBuckets = [];
+    const rng = mulberry32(20261126);
+    const silhouettes = createBuildingSilhouetteTemplates();
+    const pitchedRoofs = createPitchedRoofTemplates();
 
-    for (let d = ROUTE_START_BUFFER + 20; d <= ROUTE_END_BUFFER - 20; d += 18) {
-      if (d > LANDMARKS.sumidaBridgeStart - 28 && d < LANDMARKS.sumidaBridgeEnd + 28) {
-        continue;
+    const silKeys = [
+      'parapetBlock',     // 0
+      'setbackStep',      // 1
+      'lWingMansion',     // 2
+      'twinCoreSlab',     // 3
+      'pencilCommercial', // 4
+      'lowRiseBody',      // 5
+      'steppedHouseBody', // 6
+      'cylinderTower',    // 7
+      'chamferCrown',     // 8
+      'twinPodium',       // 9
+      'courtyardUBlock',  // 10
+    ];
+    const roofKeys = ['gable', 'hip', 'shed', 'sawtooth'];
+
+    // (facadeIdx * silKeys.length + silIdx) ごとのインスタンスバケット
+    const bodyBuckets = new Map();
+    const pushBody = (facadeIdx, silIdx, item) => {
+      const key = `${facadeIdx}:${silIdx}`;
+      let arr = bodyBuckets.get(key);
+      if (!arr) {
+        arr = { facadeIdx, silIdx, items: [] };
+        bodyBuckets.set(key, arr);
       }
+      arr.items.push(item);
+    };
 
-      const frame = this.route.getFrameAt(d);
-      const upOffset = this.route.getUpTrackOffset(d);
-      const horizRight = new THREE.Vector3().crossVectors(frame.tangent, WORLD_UP).normalize();
-      const yaw = Math.atan2(frame.tangent.x, frame.tangent.z);
+    const roofInstBuckets = [[], [], [], []]; // gable, hip, shed, sawtooth
+    const waterTankItems = [];
+    const hvacItems = [];
+    const penthouseItems = [];
+    const signBuckets = Array.from({ length: 8 }, () => []);
+    const roofBeacons = [];
 
-      const rows = [
-        { side: -1, baseDist: 17, jitter: 6 },
-        { side: -1, baseDist: 46, jitter: 14 },
-        { side: -1, baseDist: 94, jitter: 25 },
-        { side: +1, baseDist: upOffset + 17, jitter: 6 },
-        { side: +1, baseDist: upOffset + 48, jitter: 14 },
-        { side: +1, baseDist: upOffset + 98, jitter: 25 },
-      ];
+    // 外壁の微妙な色味バリエーション（同じテクスチャでも棟ごとに個体差を出す！）
+    const wallTints = [
+      new THREE.Color(0xffffff),
+      new THREE.Color(0xfaf3e8),
+      new THREE.Color(0xeef3f8),
+      new THREE.Color(0xe8e4dc),
+      new THREE.Color(0xf5e9dc),
+      new THREE.Color(0xe2e8ee),
+    ];
 
-      for (const row of rows) {
-        if (rng() < 0.18) continue;
+    // 日本の瓦・トタン・ガルバリウム・スレート工場屋根のリアルな色彩パレット
+    const houseRoofPalette = [
+      new THREE.Color(0x2d333b), // いぶし銀和瓦
+      new THREE.Color(0x24425c), // 青緑釉薬瓦・青トタン
+      new THREE.Color(0x7a3d30), // 赤茶トタン屋根
+      new THREE.Color(0x3a434c), // ダークスレート
+      new THREE.Color(0x885339), // 洋風テラコッタ
+      new THREE.Color(0x252a32), // ブラックガルバリウム
+    ];
+    const factoryRoofPalette = [
+      new THREE.Color(0x4b5c68), // スレートブルーグレー
+      new THREE.Color(0x35574b), // モスグリーン折板屋根
+      new THREE.Color(0x733f35), // 錆止め赤茶トタン
+      new THREE.Color(0x646e78), // 亜鉛メッキ鋼板シルバー
+    ];
 
-        // 日暮里〜西日暮里 14線メガコリドー・新幹線高架・谷中霊園・京成駅エリア重複回避
-        if (d < 460 && row.side < 0 && row.baseDist < 78) continue;
-        if (d < 110 && row.side > 0 && row.baseDist < 62) continue;
+    // 隅田川の水面・堤防との厳密な3D平面距離判定用
+    const riverMidD = (LANDMARKS.sumidaBridgeStart + LANDMARKS.sumidaBridgeEnd) * 0.5;
+    const riverMidFrame = this.route.getFrameAt(riverMidD);
+    const riverPos = riverMidFrame.position;
+    const riverNormal = riverMidFrame.tangent;
 
-        // 南千住ガスタンク周辺の視界確保
-        if (row.side < 0 && row.baseDist < 72 && d > 2580 && d < 2770) continue;
-
-        // 隅田川貨物駅の右側ヤード回避
-        if (
-          row.side > 0 &&
-          row.baseDist < 72 &&
-          d >= LANDMARKS.sumidaFreightYardStart - 15 &&
-          d <= LANDMARKS.sumidaFreightYardEnd + 15
-        ) {
-          continue;
+    // 駅からの近さに応じた「駅前商業度 (0.0 .. 1.0)」と地区特性の算出
+    const getDistrictProfile = (d) => {
+      let stationWeight = 0;
+      for (const st of STATIONS) {
+        const dist = Math.abs(d - (st.platformStart + st.platformEnd) * 0.5);
+        const radius = st.id === 'kitasenju' ? 380 : st.id === 'nippori' ? 300 : 230;
+        if (dist < radius) {
+          stationWeight = Math.max(stationWeight, 1.0 - dist / radius);
         }
+      }
+      const isRiverside = d > 3320 && d < 3920; // 南千住・汐入リバーサイド再開発・URエリア
+      const isIndustrial = (d > 1420 && d < 3180) || (d > 4220 && d < 4680); // 三河島〜隅田川貨物〜千住関屋の町工場・倉庫帯
+      const isShitamachi = (d > 180 && d < 1020) || (d > 1320 && d < 2650) || (d > 4210 && d < 4820);
+      return { stationWeight, isRiverside, isIndustrial, isShitamachi };
+    };
 
-        // 北千住駅東西の駅ビル・東武高架重複回避
-        if (d >= 4960 && d <= 5260 && row.baseDist < 65) continue;
+    // 奥行4層レイヤー設定（線路際の狭小密集地から遠景の高層スカイラインまで！）
+    const layerConfigs = [
+      { layer: 0, step: 13.0, baseDist: 16.5, jitter: 5.5, skipChance: 0.10 },
+      { layer: 1, step: 18.5, baseDist: 39.0, jitter: 12.0, skipChance: 0.14 },
+      { layer: 2, step: 27.0, baseDist: 78.0, jitter: 22.0, skipChance: 0.18 },
+      { layer: 3, step: 44.0, baseDist: 148.0, jitter: 58.0, skipChance: 0.26 },
+    ];
 
-        const lat = row.side * (row.baseDist + rng() * row.jitter);
-        const w = 9 + rng() * 14;
-        const depth = 10 + rng() * 14;
+    for (const layerCfg of layerConfigs) {
+      for (let d = ROUTE_START_BUFFER + 16; d <= ROUTE_END_BUFFER - 16; d += layerCfg.step) {
+        const frame = this.route.getFrameAt(d);
+        const upOffset = this.route.getUpTrackOffset(d);
+        const horizRight = new THREE.Vector3().crossVectors(frame.tangent, WORLD_UP).normalize();
+        const trackYaw = Math.atan2(frame.tangent.x, frame.tangent.z);
+        const profile = getDistrictProfile(d);
 
-        // 荒川区らしい2〜5階建て低層戸建て・雑居ビルと中層マンションのメリハリを強調！
-        let h = 7.5 + Math.pow(rng(), 2.1) * 28;
-        if (Math.abs(lat) > 38 && rng() < 0.16) {
-          h = 44 + rng() * 38;
-        }
+        for (const side of [-1, 1]) {
+          if (rng() < layerCfg.skipChance) continue;
 
-        const pos = frame.position.clone().addScaledVector(horizRight, lat);
-        pos.y = h * 0.5;
+          const sideTrackExtra = side > 0 ? upOffset : 0;
+          const absDist = sideTrackExtra + layerCfg.baseDist + rng() * layerCfg.jitter;
 
-        const rotY = yaw + (rng() - 0.5) * 0.18;
-        const vIdx = Math.floor(rng() * 3);
-        buckets[vIdx].push({ pos, w, h, depth, rotY });
+          // --- 各種鉄道施設・駅舎・ランドマークとの干渉回避 ---
+          if (d < 468 && side < 0 && absDist < 94) continue;
+          if (d < 135 && side > 0 && absDist < 74) continue;
+          if (d > 970 && d < 1235 && absDist < (side > 0 ? 25 : 20)) continue;
+          if (d > 1148 && d < 1222 && side < 0 && absDist < 58) continue;
+          if (d > 1365 && d < 1635 && side < 0 && absDist < 27) continue;
+          if (d > 2575 && d < 2775 && side < 0 && absDist < 82) continue;
 
-        if (h >= 62) {
-          roofBuckets.push(new THREE.Vector3(pos.x, h + 1.2, pos.z));
+          if (
+            side > 0 &&
+            absDist < 80 &&
+            d >= LANDMARKS.sumidaFreightYardStart - 20 &&
+            d <= LANDMARKS.sumidaFreightYardEnd + 20
+          ) {
+            continue;
+          }
+
+          if (d > 3170 && d < 3435 && absDist < (side > 0 ? 27 : 20)) continue;
+          if (d > 3455 && d < 3755 && side > 0 && absDist > 34 && absDist < 92) continue;
+
+          if (d > 4935 && d < 5275) {
+            if (side < 0 && absDist < 90) continue;
+            if (side > 0 && absDist < 48) continue;
+          }
+
+          const lat = side * absDist;
+          const pos = frame.position.clone().addScaledVector(horizRight, lat);
+          pos.y = 0;
+
+          const riverSignedDist =
+            (pos.x - riverPos.x) * riverNormal.x + (pos.z - riverPos.z) * riverNormal.z;
+          if (Math.abs(riverSignedDist) < 156) continue;
+
+          // --- 地区特性とレイヤーに応じた建物カテゴリー決定 ---
+          // 下町住宅・町工場ポケットでは連続して低層建築が並び、高架車窓に瓦・トタン屋根の海と中層ビルの落差を生む！
+          const lowRisePocket = Math.sin(d * 0.022 + side * 1.7) > 0.15;
+          let category = 'mansion';
+          const rCat = rng();
+
+          if (layerCfg.layer === 0) {
+            if (profile.stationWeight > 0.42) {
+              category = rCat < 0.48 ? 'zakkyo' : rCat < 0.78 ? 'office' : 'mansion';
+            } else if (profile.isIndustrial && (lowRisePocket ? rCat < 0.44 : rCat < 0.25)) {
+              category = 'factory';
+            } else if (profile.isShitamachi && (lowRisePocket ? rCat < 0.72 : rCat < 0.46)) {
+              category = 'house';
+            } else if (rCat < 0.62) {
+              category = 'mansion';
+            } else if (rCat < 0.84) {
+              category = 'zakkyo';
+            } else {
+              category = 'office';
+            }
+          } else if (layerCfg.layer === 1) {
+            if (profile.stationWeight > 0.35) {
+              category = rCat < 0.34 ? 'zakkyo' : rCat < 0.70 ? 'office' : 'mansion';
+            } else if (profile.isRiverside && rCat < 0.38) {
+              category = 'danchi';
+            } else if (profile.isIndustrial && rCat < 0.32) {
+              category = 'factory';
+            } else if (profile.isShitamachi && lowRisePocket && rCat < 0.44) {
+              category = 'house';
+            } else {
+              category = rCat < 0.58 ? 'mansion' : rCat < 0.80 ? 'office' : 'zakkyo';
+            }
+          } else if (layerCfg.layer === 2) {
+            if (profile.isRiverside && rCat < 0.44) {
+              category = 'danchi';
+            } else if (rCat < 0.38) {
+              category = 'office';
+            } else if (rCat < 0.50 && profile.isIndustrial) {
+              category = 'factory';
+            } else {
+              category = 'mansion';
+            }
+          } else {
+            category = rCat < 0.46 ? 'office' : rCat < 0.72 ? 'mansion' : 'danchi';
+          }
+
+          const cardinalRot = Math.floor(rng() * 4) * (Math.PI * 0.5);
+          const rotY = trackYaw + cardinalRot + (rng() - 0.5) * 0.16;
+          const tint = wallTints[Math.floor(rng() * wallTints.length)];
+
+          let w = 10;
+          let depth = 10;
+          let h = 15;
+          let facadeIdx = 0;
+          let silIdx = 0;
+          let hasFlatRoof = true;
+
+          if (category === 'house') {
+            // 2〜3階建て下町戸建て・都市型3階建て狭小住宅・木造アパート（高架運転席から屋根がしっかり見える実寸高！）
+            facadeIdx = rng() < 0.56 ? 5 : 6; // house_warm / house_cool
+            const isModern3F = facadeIdx === 6 || rng() < 0.45;
+            silIdx = isModern3F && rng() < 0.65 ? 6 : 5;
+            w = 5.8 + rng() * 5.2;
+            depth = 6.8 + rng() * 5.6;
+            h = isModern3F ? 9.2 + rng() * 3.2 : 7.8 + rng() * 2.4;
+            hasFlatRoof = false;
+
+            const roofType = isModern3F && facadeIdx === 6 ? (rng() < 0.68 ? 2 : 0) : rng() < 0.58 ? 0 : 1;
+            const roofH = roofType === 2 ? 1.4 + rng() * 0.8 : 1.8 + rng() * 1.1;
+            const roofColor = houseRoofPalette[Math.floor(rng() * houseRoofPalette.length)];
+            roofInstBuckets[roofType].push({
+              x: pos.x,
+              y: h - 0.05,
+              z: pos.z,
+              w,
+              h: roofH,
+              depth,
+              rotY,
+              color: roofColor,
+            });
+          } else if (category === 'factory') {
+            // 荒川・三河島・南千住の町工場・倉庫（のこぎり屋根または緩勾配折板切妻屋根）
+            facadeIdx = 7;
+            silIdx = 5;
+            w = 11.5 + rng() * 14.5;
+            depth = 12.5 + rng() * 15.0;
+            h = 8.8 + rng() * 5.2;
+            hasFlatRoof = false;
+
+            const roofType = rng() < 0.66 ? 3 : 0; // sawtooth or low-pitch gable
+            const roofH = roofType === 3 ? 2.2 + rng() * 1.2 : 1.5 + rng() * 0.9;
+            const roofColor = factoryRoofPalette[Math.floor(rng() * factoryRoofPalette.length)];
+            roofInstBuckets[roofType].push({
+              x: pos.x,
+              y: h - 0.05,
+              z: pos.z,
+              w,
+              h: roofH,
+              depth,
+              rotY,
+              color: roofColor,
+            });
+          } else if (category === 'zakkyo') {
+            // 駅前・通り沿いの商業雑居ビル・白スパンドレル雑居ビル・赤レンガビル
+            const fPick = rng();
+            facadeIdx = fPick < 0.50 ? 4 : fPick < 0.78 ? 10 : 9; // zakkyo / white_modern_office / retro_brick
+            const sPick = rng();
+            silIdx =
+              sPick < 0.36
+                ? 4 // pencilCommercial
+                : sPick < 0.62
+                  ? 1 // setbackStep
+                  : sPick < 0.82
+                    ? 8 // chamferCrown (交差点隅切り8角ビル！)
+                    : 0; // parapetBlock
+            w = layerCfg.layer === 0 ? 7.0 + rng() * 6.8 : 9.8 + rng() * 8.8;
+            depth = 8.5 + rng() * 8.5;
+            h = 14.0 + rng() * 19.0 + profile.stationWeight * 9.0;
+          } else if (category === 'danchi') {
+            // UR団地・大型リバーサイド板状集合住宅（外階段コア付きワイドスラブ / コの字棟）
+            facadeIdx = rng() < 0.74 ? 8 : 3; // ur_danchi / ivory_mansion
+            silIdx = rng() < 0.75 ? 3 : 10; // twinCoreSlab / courtyardUBlock
+            w = 24.0 + rng() * 18.0;
+            depth = silIdx === 10 ? 16.0 + rng() * 6.0 : 11.0 + rng() * 4.5;
+            h = 24.0 + rng() * 24.0;
+          } else if (category === 'office') {
+            // ブルーガラス・エメラルドミラー・純白水平連窓の多様なオフィス・複合ビル（円筒タワー・隅切り・ツインタワー含む！）
+            const fPick = rng();
+            facadeIdx = fPick < 0.34 ? 2 : fPick < 0.68 ? 11 : fPick < 0.90 ? 10 : 0;
+            const sPick = rng();
+            silIdx =
+              sPick < 0.24
+                ? 7 // cylinderTower (円筒アールタワー！)
+                : sPick < 0.46
+                  ? 8 // chamferCrown (8角隅切りビル！)
+                  : sPick < 0.64
+                    ? 9 // twinPodium (非対称ツインタワー複合ビル！)
+                    : sPick < 0.82
+                      ? 1 // setbackStep
+                      : 0; // parapetBlock
+            w = silIdx === 7 || silIdx === 8 ? 14.0 + rng() * 12.0 : 13.0 + rng() * 16.0;
+            depth = silIdx === 7 || silIdx === 8 ? w * (0.9 + rng() * 0.2) : 13.0 + rng() * 15.0;
+            h =
+              layerCfg.layer >= 2
+                ? 34.0 + rng() * 58.0
+                : 20.0 + rng() * 26.0 + profile.stationWeight * 14.0;
+          } else {
+            // 分譲マンション・デザイナーズマンション（赤茶タイル・白磁アイボリー・チャコール・純白）
+            const fPick = rng();
+            facadeIdx = fPick < 0.36 ? 1 : fPick < 0.72 ? 3 : fPick < 0.90 ? 0 : 10;
+            const sPick = rng();
+            silIdx =
+              sPick < 0.28
+                ? 2 // lWingMansion
+                : sPick < 0.54
+                  ? 1 // setbackStep
+                  : sPick < 0.74
+                    ? 10 // courtyardUBlock (コの字マンション！)
+                    : sPick < 0.88
+                      ? 9 // twinPodium
+                      : 0; // parapetBlock
+            w = 10.5 + rng() * 14.5;
+            depth = 10.5 + rng() * 13.5;
+            h =
+              layerCfg.layer === 0
+                ? 14.0 + rng() * 19.0
+                : layerCfg.layer >= 2
+                  ? 28.0 + rng() * 52.0
+                  : 17.0 + rng() * 27.0;
+          }
+
+          pushBody(facadeIdx, silIdx, {
+            x: pos.x,
+            y: 0,
+            z: pos.z,
+            w,
+            h,
+            depth,
+            rotY,
+            color: tint,
+          });
+
+          // 建物のローカル座標 (lx, lz) を rotY でワールド座標へ変換するヘルパー
+          const cosY = Math.cos(rotY);
+          const sinY = Math.sin(rotY);
+          const localToWorld = (lx, lz) => ({
+            wx: pos.x + lx * cosY + lz * sinY,
+            wz: pos.z - lx * sinY + lz * cosY,
+          });
+
+          // --- 屋上ストラクチャ（高架水槽・空調室外機群・エレベーター塔屋：フラット上面を持つシルエット0..4に配置！） ---
+          if (hasFlatRoof && silIdx <= 4 && layerCfg.layer <= 2 && h >= 13.0) {
+            const roofZone =
+              silIdx === 1
+                ? { cx: -0.14, cz: -0.11, sx: 0.22, sz: 0.24, y: h }
+                : silIdx === 2
+                  ? { cx: 0.16, cz: 0.22, sx: 0.24, sz: 0.20, y: h * 0.96 }
+                  : silIdx === 3
+                    ? { cx: 0.0, cz: -0.05, sx: 0.56, sz: 0.34, y: h * 0.96 }
+                    : silIdx === 4
+                      ? { cx: -0.12, cz: 0.10, sx: 0.26, sz: 0.28, y: h * 0.93 }
+                      : { cx: 0.0, cz: 0.0, sx: 0.52, sz: 0.52, y: h * 0.955 };
+
+            // 昭和・平成マンションや雑居ビルの象徴「FRP高架水槽タンク」
+            if ((facadeIdx === 1 || facadeIdx === 4 || facadeIdx === 8 || facadeIdx === 9) && rng() < 0.52) {
+              const tankSize = 2.0 + rng() * 1.0;
+              const tp = localToWorld(
+                (roofZone.cx + (rng() - 0.5) * roofZone.sx) * w,
+                (roofZone.cz + (rng() - 0.5) * roofZone.sz) * depth
+              );
+              waterTankItems.push({
+                x: tp.wx,
+                y: roofZone.y,
+                z: tp.wz,
+                w: tankSize,
+                h: tankSize * 1.25,
+                depth: tankSize,
+                rotY: rotY + (rng() - 0.5) * 0.2,
+                color: rng() < 0.75 ? new THREE.Color(0xded9cb) : new THREE.Color(0xc5ced4),
+              });
+            }
+            // オフィス・商業・モダンマンション屋上の「大型空調室外機チラー群」
+            if (rng() < 0.58) {
+              const cw = 2.2 + rng() * 1.6;
+              const hp = localToWorld(
+                (roofZone.cx + (rng() - 0.5) * roofZone.sx) * w,
+                (roofZone.cz + (rng() - 0.5) * roofZone.sz) * depth
+              );
+              hvacItems.push({
+                x: hp.wx,
+                y: roofZone.y,
+                z: hp.wz,
+                w: cw,
+                h: 1.5 + rng() * 0.75,
+                depth: cw * 0.95,
+                rotY,
+                color: new THREE.Color(0x9aa2aa),
+              });
+            }
+            // フラットルーフビルの「エレベーター機械室・階段室ペントハウス（塔屋）」
+            if (silIdx === 0 && rng() < 0.65) {
+              const pp = localToWorld((rng() - 0.5) * w * 0.26, (rng() - 0.5) * depth * 0.26);
+              penthouseItems.push({
+                x: pp.wx,
+                y: h * 0.955,
+                z: pp.wz,
+                w: Math.min(w * 0.36, 4.5),
+                h: 2.5 + rng() * 1.6,
+                depth: Math.min(depth * 0.36, 4.6),
+                rotY,
+                color:
+                  facadeIdx === 1
+                    ? new THREE.Color(0x825b4c)
+                    : facadeIdx === 3 || facadeIdx === 8
+                      ? new THREE.Color(0xc8c2b8)
+                      : new THREE.Color(0x6c727a),
+              });
+            }
+          }
+
+          // --- 駅前・線路沿い商業ビルの内照式「突き出し袖看板」＆「屋上広告塔ビルボード」 ---
+          if (
+            (category === 'zakkyo' || (category === 'office' && profile.stationWeight > 0.25)) &&
+            layerCfg.layer <= 1
+          ) {
+            const toTrackX = -horizRight.x * side;
+            const toTrackZ = -horizRight.z * side;
+            const signIdx = Math.floor(rng() * 8);
+            const cosCard = Math.abs(Math.cos(cardinalRot));
+            const halfTowardTrack =
+              (cosCard > 0.5 ? w : depth) * 0.5 * (silIdx === 4 ? 0.88 : silIdx === 1 ? 0.85 : 1.0);
+            const halfAlongTrack = (cosCard > 0.5 ? depth : w) * 0.32;
+
+            // 縦長突き出し袖看板（線路側壁面に密着して突き出し、運転席から正面が見える！）
+            if (rng() < 0.78) {
+              const maxSignTop = silIdx === 1 ? h * 0.52 : h * 0.88;
+              const signH = Math.min(maxSignTop * 0.45, 3.4 + rng() * 3.2);
+              const signY = Math.max(4.8, maxSignTop - signH * 0.55 - rng() * 2.0);
+              const edgeDist = halfTowardTrack + 0.44;
+              signBuckets[signIdx].push({
+                x: pos.x + toTrackX * edgeDist + frame.tangent.x * halfAlongTrack,
+                y: signY,
+                z: pos.z + toTrackZ * edgeDist + frame.tangent.z * halfAlongTrack,
+                w: 0.92,
+                h: signH,
+                depth: 0.24,
+                rotY: trackYaw + Math.PI * 0.5,
+              });
+            }
+
+            // 屋上大型広告看板（駅前エリアのフラットルーフ商業ビル頭上に輝くネオン広告塔！）
+            if (hasFlatRoof && (silIdx === 0 || silIdx === 4) && (profile.stationWeight > 0.26 || rng() < 0.24)) {
+              const bIdx = Math.floor(rng() * 8);
+              const bw = Math.min(w * 0.72, 4.6 + rng() * 3.4);
+              const bh = 2.5 + rng() * 1.7;
+              const roofBase = silIdx === 4 ? h * 0.93 : h * 0.96;
+              signBuckets[bIdx].push({
+                x: pos.x + toTrackX * (halfTowardTrack * 0.35),
+                y: roofBase + bh * 0.5 + 0.15,
+                z: pos.z + toTrackZ * (halfTowardTrack * 0.35),
+                w: bw,
+                h: bh,
+                depth: 0.42,
+                rotY: trackYaw + (side > 0 ? -0.32 : 0.32),
+              });
+            }
+          }
+
+          // 60m超の高層建築には赤色点滅の航空障害灯を設置
+          if (h >= 60) {
+            roofBeacons.push(new THREE.Vector3(pos.x, h + 1.3, pos.z));
+          }
         }
       }
     }
 
-    const boxGeo = new THREE.BoxGeometry(1, 1, 1);
     const dummy = new THREE.Object3D();
 
-    for (let v = 0; v < 3; v++) {
-      const list = buckets[v];
-      if (!list.length) continue;
-      const mat = this._getOrCreateBuildingMaterial(v);
-      const inst = new THREE.InstancedMesh(boxGeo, mat, list.length);
+    // 1. 全建築ボディ InstancedMesh 構築
+    for (const bucket of bodyBuckets.values()) {
+      const { facadeIdx, silIdx, items } = bucket;
+      if (!items.length) continue;
+      const geo = silhouettes[silKeys[silIdx]];
+      const mat = this._getOrCreateBuildingMaterial(facadeIdx);
+      const inst = new THREE.InstancedMesh(geo, mat, items.length);
       inst.receiveShadow = true;
+      inst.castShadow = true;
 
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i];
+        dummy.position.set(it.x, it.y, it.z);
+        dummy.scale.set(it.w, it.h, it.depth);
+        dummy.rotation.set(0, it.rotY, 0);
+        dummy.updateMatrix();
+        inst.setMatrixAt(i, dummy.matrix);
+        inst.setColorAt(i, it.color);
+      }
+      inst.instanceMatrix.needsUpdate = true;
+      if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
+      this.group.add(inst);
+    }
+
+    // 2. 勾配屋根（切妻・寄棟・片流れ・町工場のこぎり屋根）InstancedMesh 構築（全種でマテリアル1個共有！）
+    const pitchedRoofMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      roughness: 0.64,
+      metalness: 0.28,
+      envMapIntensity: 0.95,
+    });
+    for (let rIdx = 0; rIdx < roofKeys.length; rIdx++) {
+      const list = roofInstBuckets[rIdx];
+      if (!list.length) continue;
+      const inst = new THREE.InstancedMesh(pitchedRoofs[roofKeys[rIdx]], pitchedRoofMat, list.length);
+      inst.receiveShadow = true;
+      inst.castShadow = true;
       for (let i = 0; i < list.length; i++) {
-        const item = list[i];
-        dummy.position.copy(item.pos);
-        dummy.scale.set(item.w, item.h, item.depth);
-        dummy.rotation.set(0, item.rotY, 0);
+        const it = list[i];
+        dummy.position.set(it.x, it.y, it.z);
+        dummy.scale.set(it.w, it.h, it.depth);
+        dummy.rotation.set(0, it.rotY, 0);
+        dummy.updateMatrix();
+        inst.setMatrixAt(i, dummy.matrix);
+        inst.setColorAt(i, it.color);
+      }
+      inst.instanceMatrix.needsUpdate = true;
+      if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
+      this.group.add(inst);
+    }
+
+    // 3. 屋上設備（高架水槽タンク・空調室外機群・塔屋ペントハウス）InstancedMesh 構築（マテリアル1個共有！）
+    const rooftopEquipMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      roughness: 0.68,
+      metalness: 0.24,
+      envMapIntensity: 0.9,
+    });
+    const equipBatches = [
+      { geo: createWaterTankGeo(), list: waterTankItems },
+      { geo: createHvacClusterGeo(), list: hvacItems },
+      { geo: createCleanRoofBoxGeo(1, 1, 1, 0, 0.5, 0), list: penthouseItems },
+    ];
+    for (const batch of equipBatches) {
+      if (!batch.list.length) continue;
+      const inst = new THREE.InstancedMesh(batch.geo, rooftopEquipMat, batch.list.length);
+      for (let i = 0; i < batch.list.length; i++) {
+        const it = batch.list[i];
+        dummy.position.set(it.x, it.y, it.z);
+        dummy.scale.set(it.w, it.h, it.depth);
+        dummy.rotation.set(0, it.rotY, 0);
+        dummy.updateMatrix();
+        inst.setMatrixAt(i, dummy.matrix);
+        inst.setColorAt(i, it.color);
+      }
+      inst.instanceMatrix.needsUpdate = true;
+      if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
+      this.group.add(inst);
+    }
+
+    // 4. 袖看板・屋上広告塔 InstancedMesh 構築（8セルすべて1個のサインマテリアルを共有！）
+    const signTex = createUrbanSignageTexture(4);
+    this.signageMaterial = new THREE.MeshStandardMaterial({
+      map: signTex.map,
+      emissive: new THREE.Color(0xffffff),
+      emissiveMap: signTex.emissiveMap,
+      emissiveIntensity: 1.25,
+      roughness: 0.36,
+      metalness: 0.12,
+    });
+    for (let sIdx = 0; sIdx < 8; sIdx++) {
+      const list = signBuckets[sIdx];
+      if (!list.length) continue;
+      const inst = new THREE.InstancedMesh(createSignCellGeo(sIdx), this.signageMaterial, list.length);
+      for (let i = 0; i < list.length; i++) {
+        const it = list[i];
+        dummy.position.set(it.x, it.y, it.z);
+        dummy.scale.set(it.w, it.h, it.depth);
+        dummy.rotation.set(0, it.rotY, 0);
         dummy.updateMatrix();
         inst.setMatrixAt(i, dummy.matrix);
       }
@@ -1943,11 +2850,12 @@ export class ScenerySystem {
       this.group.add(inst);
     }
 
+    // 5. 高層ビル航空障害灯
     const beaconGeo = new THREE.SphereGeometry(0.45, 8, 8);
-    for (let i = 0; i < roofBuckets.length; i++) {
+    for (let i = 0; i < roofBeacons.length; i++) {
       const mat = new THREE.MeshBasicMaterial({ color: new THREE.Color(3.2, 0.12, 0.08) });
       const mesh = new THREE.Mesh(beaconGeo, mat);
-      mesh.position.copy(roofBuckets[i]);
+      mesh.position.copy(roofBeacons[i]);
       this.group.add(mesh);
       this.obstructionLights.push({ mat, phase: i * 1.3 });
     }

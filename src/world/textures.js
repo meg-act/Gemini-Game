@@ -303,13 +303,144 @@ export function createPlatformSurfaceTexture(anisotropy = 8) {
 }
 
 /**
- * 沿線ビル・マンション群のリアルなファサードPBRテクスチャ（夕暮れ窓明かり＆ガラス反射）
+ * 沿線ビル・マンション・雑居ビル・下町住宅・町工場・UR団地の多様なファサードPBRテクスチャ（全10種）
+ * - キャンバス上部 y=0..46 (Three.js UV v=0.91..1.00) は非発光の屋上防水コンクリート専用領域（屋上が窓模様にならない！）
+ * - キャンバス下部 y=456..512 (UV v=0.00..0.11) は1階エントランス・コンビニ/店舗・シャッター等の接地階表現
  */
 export function createBuildingFacadeVariants(anisotropy = 4) {
   const variants = [
-    { seed: 101, wall: '#565961', mullion: '#3a3d45', litRate: 0.34, style: 'residential' },
-    { seed: 202, wall: '#6c655e', mullion: '#4c4640', litRate: 0.38, style: 'apartment_warm' },
-    { seed: 303, wall: '#3c4652', mullion: '#262e38', litRate: 0.44, style: 'office_glass' },
+    // 0: モダン高層・中層レジデンス（チャコール＆ガラス手すりバルコニー）
+    {
+      seed: 101,
+      arch: 'modern_mansion',
+      wall: '#4a4f57',
+      mullion: '#30353d',
+      roof: '#5a5f66',
+      rows: 16,
+      cols: 8,
+      litRate: 0.36,
+    },
+    // 1: 昭和・平成の赤茶磁気タイル張り分譲マンション（沿線の定番！）
+    {
+      seed: 202,
+      arch: 'tile_mansion',
+      wall: '#8f5843',
+      mullion: '#9c8f83',
+      roof: '#63666a',
+      rows: 11,
+      cols: 7,
+      litRate: 0.40,
+    },
+    // 2: ブルーグリーン全面ガラスカーテンウォール近代オフィスビル
+    {
+      seed: 303,
+      arch: 'curtain_office',
+      wall: '#2b4054',
+      mullion: '#728699',
+      roof: '#4e555d',
+      rows: 16,
+      cols: 10,
+      litRate: 0.48,
+    },
+    // 3: 白・アイボリー系デザイナーズマンション（明るい白磁タイル＋黒サッシ＆縦格子ルーバー）
+    {
+      seed: 404,
+      arch: 'ivory_mansion',
+      wall: '#e4dfd4',
+      mullion: '#3d4147',
+      roof: '#696e73',
+      rows: 10,
+      cols: 7,
+      litRate: 0.38,
+    },
+    // 4: 駅前・通り沿いの商業雑居ビル・ペンシルビル（横長連窓＋腰壁スパンドレル＋1階コンビニ発光）
+    {
+      seed: 505,
+      arch: 'zakkyo_commercial',
+      wall: '#9d988e',
+      mullion: '#595c61',
+      roof: '#585c62',
+      rows: 10,
+      cols: 5,
+      litRate: 0.54,
+    },
+    // 5: 下町2〜3階建て戸建て住宅・木造モルタルアパート（明るいクリームベージュ＋雨戸袋＋ベランダ）
+    {
+      seed: 606,
+      arch: 'house_warm',
+      wall: '#d8cab4',
+      mullion: '#5a4a3f',
+      roof: '#52565c',
+      rows: 3,
+      cols: 4,
+      litRate: 0.42,
+    },
+    // 6: 現代都市型3階建て狭小住宅・コーポ（スレートネイビー＋木目玄関＋スリット窓）
+    {
+      seed: 707,
+      arch: 'house_cool',
+      wall: '#3c4a5c',
+      mullion: '#222a35',
+      roof: '#474c54',
+      rows: 3,
+      cols: 4,
+      litRate: 0.40,
+    },
+    // 7: 荒川・三河島・南千住の町工場・倉庫・作業所（青灰波板スレート＋1階重量シャッター＋高窓作業灯）
+    {
+      seed: 808,
+      arch: 'factory',
+      wall: '#687983',
+      mullion: '#424e56',
+      roof: '#505860',
+      rows: 3,
+      cols: 5,
+      litRate: 0.36,
+    },
+    // 8: 大型UR団地・リバーサイド板状集合住宅（オフホワイト連続ベランダ＋外階段スリット）
+    {
+      seed: 909,
+      arch: 'ur_danchi',
+      wall: '#e5e0d5',
+      mullion: '#889490',
+      roof: '#686d72',
+      rows: 12,
+      cols: 8,
+      litRate: 0.42,
+    },
+    // 9: ヴィンテージ赤レンガ・テラコッタ商業ビル／ビジネスホテル（2連縦長窓＋1階暖色店舗）
+    {
+      seed: 1010,
+      arch: 'retro_brick',
+      wall: '#824637',
+      mullion: '#a89a88',
+      roof: '#56595e',
+      rows: 9,
+      cols: 6,
+      litRate: 0.46,
+    },
+    // 10: 純白アルミスパンドレル水平連窓オフィス・クリニックビル（白い横縞が都会的で鮮烈！）
+    {
+      seed: 1111,
+      arch: 'white_modern_office',
+      wall: '#eaedf2',
+      mullion: '#b8c0ca',
+      roof: '#6a7077',
+      rows: 12,
+      cols: 6,
+      litRate: 0.50,
+    },
+    // 11: エメラルドグリーン反射ハーフミラーガラスビル（90〜00年代東京オフィスの象徴色！）
+    {
+      seed: 1212,
+      arch: 'emerald_glass_tower',
+      wall: '#1f4f50',
+      mullion: '#9cb0b5',
+      roof: '#4d5759',
+      rows: 15,
+      cols: 9,
+      litRate: 0.46,
+    },
   ];
 
   return variants.map((cfg) => {
@@ -332,73 +463,364 @@ export function createBuildingFacadeVariants(anisotropy = 4) {
     roughCanvas.height = h;
     const rCtx = roughCanvas.getContext('2d');
 
-    // 外壁ベース
+    // 全体初期化
     cCtx.fillStyle = cfg.wall;
     cCtx.fillRect(0, 0, w, h);
     eCtx.fillStyle = '#000000';
     eCtx.fillRect(0, 0, w, h);
-    rCtx.fillStyle = '#d8d8d8'; // 外壁はマット (roughness ~0.85)
+    rCtx.fillStyle = '#dcdcdc';
     rCtx.fillRect(0, 0, w, h);
 
-    const cols = cfg.style === 'office_glass' ? 12 : 9;
-    const rows = 24;
-    const cellW = w / cols;
-    const cellH = h / rows;
+    // 外壁の微細テクスチャ（タイル目地・波板・モルタル粒子）
+    if (cfg.arch === 'tile_mansion' || cfg.arch === 'retro_brick' || cfg.arch === 'ivory_mansion') {
+      cCtx.fillStyle = 'rgba(0,0,0,0.10)';
+      for (let ty = 56; ty < 460; ty += 6) {
+        cCtx.fillRect(0, ty, w, 1);
+      }
+      cCtx.fillStyle = 'rgba(255,255,255,0.05)';
+      for (let tx = 0; tx < w; tx += 16) {
+        cCtx.fillRect(tx, 56, 1, 404);
+      }
+    } else if (cfg.arch === 'factory' || cfg.arch === 'house_cool') {
+      // ガルバリウム・スレート波板の縦リブ陰影
+      for (let tx = 0; tx < w; tx += 6) {
+        cCtx.fillStyle = tx % 12 === 0 ? 'rgba(0,0,0,0.12)' : 'rgba(255,255,255,0.05)';
+        cCtx.fillRect(tx, 56, 2, 456);
+      }
+    }
 
-    for (let r = 0; r < rows; r++) {
-      // 階層スラブ・スパンドレル帯（コンクリート・アルミパネルの重厚感）
+    // -------------------------------------------------------------------------
+    // 1. 屋上防水コンクリート領域 (y = 0..46 -> UV v = 0.91..1.00) — 完全非発光！
+    // -------------------------------------------------------------------------
+    const roofBottom = 46;
+    cCtx.fillStyle = cfg.roof;
+    cCtx.fillRect(0, 0, w, roofBottom);
+    rCtx.fillStyle = '#e8e8e8';
+    rCtx.fillRect(0, 0, w, roofBottom);
+
+    // 屋上防水シートの伸縮目地と縁の雨染み
+    cCtx.strokeStyle = 'rgba(30, 34, 38, 0.32)';
+    cCtx.lineWidth = 1;
+    for (let rx = 0; rx <= w; rx += 32) {
+      cCtx.beginPath();
+      cCtx.moveTo(rx, 0);
+      cCtx.lineTo(rx, roofBottom);
+      cCtx.stroke();
+    }
+    for (let ry = 0; ry <= roofBottom; ry += 16) {
+      cCtx.beginPath();
+      cCtx.moveTo(0, ry);
+      cCtx.lineTo(w, ry);
+      cCtx.stroke();
+    }
+    for (let n = 0; n < 180; n++) {
+      const nx = rng() * w;
+      const ny = rng() * (roofBottom - 2);
+      cCtx.fillStyle = rng() < 0.5 ? 'rgba(0,0,0,0.08)' : 'rgba(255,255,255,0.06)';
+      cCtx.fillRect(nx, ny, 3, 3);
+    }
+
+    // パラペット笠木帯 (y = 46..56 -> UV v = 0.89..0.91)
+    cCtx.fillStyle = '#343940';
+    cCtx.fillRect(0, roofBottom, w, 6);
+    cCtx.fillStyle = 'rgba(0,0,0,0.35)';
+    cCtx.fillRect(0, roofBottom + 6, w, 4);
+    rCtx.fillStyle = '#787878';
+    rCtx.fillRect(0, roofBottom, w, 6);
+
+    // -------------------------------------------------------------------------
+    // 2. 中間階ファサード領域 (y = 56..456 -> UV v = 0.11..0.89)
+    // -------------------------------------------------------------------------
+    const bodyTop = 56;
+    const bodyBottom = 456;
+    const bodyH = bodyBottom - bodyTop;
+    const cellW = w / cfg.cols;
+    const cellH = bodyH / cfg.rows;
+    const isGlassCurtain = cfg.arch === 'curtain_office' || cfg.arch === 'emerald_glass_tower';
+
+    const getLightPalette = () => {
+      if (cfg.arch === 'emerald_glass_tower') return ['#d4fff4', '#e8fff9', '#fff4d8', '#c4f5ea'];
+      if (isGlassCurtain || cfg.arch === 'white_modern_office') {
+        return ['#d8eeff', '#eef7ff', '#fff3d6', '#c6e0ff'];
+      }
+      if (cfg.arch === 'zakkyo_commercial') return ['#fff5dd', '#dff2ff', '#ffd596', '#ffe4b5'];
+      if (cfg.arch === 'factory') return ['#d4f7ee', '#e2f2ff', '#fff0cf'];
+      return ['#ffcf87', '#ffdca8', '#ffe9c4', '#dcebff', '#ffc270'];
+    };
+    const palette = getLightPalette();
+
+    for (let r = 0; r < cfg.rows; r++) {
+      const fy = bodyTop + r * cellH;
+      const isMechFloor = isGlassCurtain && r === Math.floor(cfg.rows * 0.45);
+
+      // スラブ・幕板・胴蛇腹ライン
       cCtx.fillStyle = cfg.mullion;
-      cCtx.fillRect(0, r * cellH, w, 5);
+      const slabH = isGlassCurtain
+        ? Math.max(4, cellH * 0.24)
+        : cfg.arch === 'white_modern_office'
+          ? Math.max(3, cellH * 0.10)
+          : Math.max(3, cellH * 0.14);
+      cCtx.fillRect(0, fy, w, slabH);
 
-      if (cfg.style !== 'office_glass') {
-        // マンションのバルコニー手すり腰壁
-        cCtx.fillStyle = 'rgba(22, 25, 30, 0.42)';
-        cCtx.fillRect(0, r * cellH + cellH * 0.58, w, cellH * 0.42);
+      // 白い水平連窓ビルは純白スパンドレル腰壁をくっきり残す！
+      if (cfg.arch === 'white_modern_office') {
+        cCtx.fillStyle = '#eff2f7';
+        cCtx.fillRect(0, fy + cellH * 0.60, w, cellH * 0.40);
+      } else if (cfg.arch === 'zakkyo_commercial') {
+        cCtx.fillStyle = '#aba69c';
+        cCtx.fillRect(0, fy + cellH * 0.64, w, cellH * 0.36);
       }
 
-      for (let c = 0; c < cols; c++) {
-        const padX = cfg.style === 'office_glass' ? 3 : 5;
-        const padY = 6;
-        const wx = c * cellW + padX;
-        const wy = r * cellH + padY;
-        const ww = cellW - padX * 2;
-        const wh = cellH - padY * 1.7;
+      if (isMechFloor) {
+        // 近代オフィスビル中層階の機械室ガラリ（ルーバー階）
+        cCtx.fillStyle = '#25303a';
+        cCtx.fillRect(0, fy + slabH, w, cellH - slabH);
+        cCtx.fillStyle = '#465462';
+        for (let ly = fy + slabH + 2; ly < fy + cellH - 2; ly += 4) {
+          cCtx.fillRect(4, ly, w - 8, 1.5);
+        }
+        rCtx.fillStyle = '#909090';
+        rCtx.fillRect(0, fy, w, cellH);
+        continue;
+      }
 
-        // ガラス面（暗い反射面、roughness低めでマジックアワーの空をIBL反射！）
-        cCtx.fillStyle = '#1d2530';
+      for (let c = 0; c < cfg.cols; c++) {
+        const fx = c * cellW;
+
+        // UR団地の中央外階段スリット表現
+        if (cfg.arch === 'ur_danchi' && (c === 2 || c === 6)) {
+          cCtx.fillStyle = '#8b938f';
+          cCtx.fillRect(fx + 3, fy, cellW - 6, cellH);
+          cCtx.fillStyle = '#2a3338';
+          cCtx.fillRect(fx + 7, fy + 5, cellW - 14, cellH - 9);
+          eCtx.fillStyle = '#fff0d0';
+          eCtx.globalAlpha = 0.72;
+          eCtx.fillRect(fx + 8, fy + 7, cellW - 16, cellH - 13);
+          eCtx.globalAlpha = 1.0;
+          continue;
+        }
+
+        const padX =
+          isGlassCurtain || cfg.arch === 'white_modern_office'
+            ? 1.5
+            : cfg.arch === 'zakkyo_commercial'
+              ? 3.5
+              : cfg.arch.startsWith('house_')
+                ? 9
+                : 5;
+        const padTop = slabH + (cfg.arch.startsWith('house_') ? 14 : 2.5);
+        const padBot =
+          cfg.arch === 'white_modern_office'
+            ? cellH * 0.40
+            : cfg.arch === 'zakkyo_commercial'
+              ? cellH * 0.36
+              : cfg.arch.includes('mansion') || cfg.arch === 'ur_danchi'
+                ? cellH * 0.34
+                : cfg.arch.startsWith('house_')
+                  ? 22
+                  : 6;
+
+        const wx = fx + padX;
+        const wy = fy + padTop;
+        const ww = Math.max(6, cellW - padX * 2);
+        const wh = Math.max(6, cellH - padTop - padBot);
+
+        // ガラス窓ベース（IBL空反射用の低ラフネス面）
+        cCtx.fillStyle =
+          cfg.arch === 'emerald_glass_tower'
+            ? '#13383a'
+            : isGlassCurtain || cfg.arch === 'white_modern_office'
+              ? '#1a2c3d'
+              : '#1c242e';
         cCtx.fillRect(wx, wy, ww, wh);
-        rCtx.fillStyle = '#2c2c2c'; // ガラス roughness ~0.17
+        rCtx.fillStyle = isGlassCurtain || cfg.arch === 'white_modern_office' ? '#1e1e1e' : '#2e2e2e';
         rCtx.fillRect(wx, wy, ww, wh);
 
-        // 夕暮れに点灯している部屋・オフィス
-        if (rng() < cfg.litRate && r > 0) {
-          const palette =
-            cfg.style === 'office_glass'
-              ? ['#d9ecff', '#fff0d4', '#cfe2ff']
-              : ['#ffcf87', '#ffdca8', '#ffe9c4', '#dcebff'];
+        // 戸建て住宅の引き違いサッシ中桟＆雨戸戸袋
+        if (cfg.arch.startsWith('house_')) {
+          cCtx.fillStyle = cfg.arch === 'house_warm' ? '#4b3b30' : '#dce2ea';
+          cCtx.fillRect(wx + ww * 0.48, wy, 2, wh);
+          if (cfg.arch === 'house_warm') {
+            cCtx.fillStyle = '#5c493c';
+            cCtx.fillRect(wx + ww, wy, 5, wh);
+          }
+        }
+
+        // 夕暮れ〜夜間の室内点灯
+        if (rng() < cfg.litRate) {
           const lightColor = palette[Math.floor(rng() * palette.length)];
-          const brightness = 0.45 + rng() * 0.55;
+          const brightness = 0.48 + rng() * 0.52;
+          const curtainRatio = rng() < 0.42 ? 0.52 + rng() * 0.38 : 1.0;
+          const blindTop = isGlassCurtain && rng() < 0.35 ? 0.35 : 0.0;
+
+          const lx = wx + 1;
+          const ly = wy + 1 + (wh - 2) * blindTop;
+          const lw = (ww - 2) * curtainRatio;
+          const lh = (wh - 2) * (1 - blindTop);
 
           eCtx.save();
           eCtx.globalAlpha = brightness;
           eCtx.fillStyle = lightColor;
-          // カーテンやブラインドで一部遮られたリアルな窓明かり
-          const curtainRatio = rng() < 0.4 ? 0.55 + rng() * 0.35 : 1.0;
-          eCtx.fillRect(wx + 1, wy + 1, (ww - 2) * curtainRatio, wh - 2);
+          eCtx.fillRect(lx, ly, lw, lh);
           eCtx.restore();
 
+          cCtx.save();
+          cCtx.globalAlpha = 0.52 * brightness;
           cCtx.fillStyle = lightColor;
-          cCtx.globalAlpha = 0.5 * brightness;
-          cCtx.fillRect(wx + 1, wy + 1, (ww - 2) * curtainRatio, wh - 2);
-          cCtx.globalAlpha = 1.0;
+          cCtx.fillRect(lx, ly, lw, lh);
+          cCtx.restore();
+        }
+
+        // 雑居ビルの窓面テナントカッティングシートサイン（小ぶりでリアルに！）
+        if (cfg.arch === 'zakkyo_commercial' && rng() < 0.16) {
+          const signCols = ['#e64a2e', '#f2be1a', '#2494eb', '#2fb85d'];
+          const sc = signCols[Math.floor(rng() * signCols.length)];
+          cCtx.fillStyle = sc;
+          cCtx.fillRect(wx + 2, wy + wh * 0.65, ww - 4, wh * 0.30);
+          eCtx.save();
+          eCtx.globalAlpha = 0.58;
+          eCtx.fillStyle = sc;
+          eCtx.fillRect(wx + 2, wy + wh * 0.65, ww - 4, wh * 0.30);
+          eCtx.restore();
+        }
+
+        // マンション・UR団地のベランダ手すり・隔て板・室外機ディテール
+        if (cfg.arch.includes('mansion') || cfg.arch === 'ur_danchi') {
+          const balY = fy + cellH * 0.62;
+          const balH = cellH * 0.36;
+          if (cfg.arch === 'modern_mansion') {
+            // 半透明ダークガラス手すり＋アルミ笠木
+            cCtx.fillStyle = 'rgba(26, 34, 44, 0.72)';
+            cCtx.fillRect(fx + 2, balY, cellW - 4, balH);
+            cCtx.fillStyle = '#8b95a1';
+            cCtx.fillRect(fx + 2, balY, cellW - 4, 2);
+            rCtx.fillStyle = '#484848';
+            rCtx.fillRect(fx + 2, balY, cellW - 4, balH);
+          } else if (cfg.arch === 'ivory_mansion') {
+            // 縦格子ルーバー手すり
+            cCtx.fillStyle = '#2d3138';
+            for (let lx = fx + 3; lx < fx + cellW - 3; lx += 4) {
+              cCtx.fillRect(lx, balY, 2, balH);
+            }
+          } else {
+            // コンクリート・タイル腰壁ベランダ＋曇りガラス隔て板
+            cCtx.fillStyle = cfg.arch === 'ur_danchi' ? '#e2ddd4' : '#968a7e';
+            cCtx.fillRect(fx + 1, balY, cellW - 2, balH);
+            cCtx.fillStyle = 'rgba(210, 225, 235, 0.55)';
+            cCtx.fillRect(fx, fy + slabH, 2, cellH - slabH);
+          }
         }
       }
+
+      // 戸建て2階のベランダ手すり帯
+      if (cfg.arch.startsWith('house_') && r === 1) {
+        const by = fy + cellH * 0.68;
+        cCtx.fillStyle = cfg.arch === 'house_warm' ? '#6d5c4d' : '#262d37';
+        cCtx.fillRect(14, by, w - 28, cellH * 0.26);
+      }
+    }
+
+    // カーテンウォール・商業ビルの縦マリオン方立
+    if (isGlassCurtain || cfg.arch === 'modern_mansion' || cfg.arch === 'retro_brick') {
+      cCtx.fillStyle = cfg.mullion;
+      const mw = cfg.arch === 'retro_brick' ? 4 : 2;
+      for (let c = 0; c <= cfg.cols; c++) {
+        cCtx.fillRect(Math.min(w - mw, c * cellW), bodyTop, mw, bodyH);
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // 3. 1階 接地フロア表現 (y = 456..512 -> UV v = 0.00..0.11)
+    // -------------------------------------------------------------------------
+    cCtx.fillStyle = '#2b2e33';
+    cCtx.fillRect(0, bodyBottom, w, h - bodyBottom);
+    rCtx.fillStyle = '#b0b0b0';
+    rCtx.fillRect(0, bodyBottom, w, h - bodyBottom);
+
+    if (
+      cfg.arch === 'zakkyo_commercial' ||
+      isGlassCurtain ||
+      cfg.arch === 'white_modern_office' ||
+      cfg.arch === 'retro_brick'
+    ) {
+      // コンビニ・カフェ・店舗・オフィスロビーの明るい1階ガラスファサード＆行灯看板帯
+      const signBandCol =
+        cfg.arch === 'zakkyo_commercial'
+          ? '#00995c'
+          : cfg.arch === 'retro_brick'
+            ? '#9e3628'
+            : cfg.arch === 'emerald_glass_tower'
+              ? '#008c84'
+              : '#2864a8';
+      cCtx.fillStyle = signBandCol;
+      cCtx.fillRect(4, bodyBottom + 3, w - 8, 10);
+      cCtx.fillStyle = '#f8f9fa';
+      cCtx.fillRect(4, bodyBottom + 13, w - 8, 4);
+
+      eCtx.fillStyle = signBandCol;
+      eCtx.globalAlpha = 0.75;
+      eCtx.fillRect(4, bodyBottom + 3, w - 8, 10);
+      eCtx.fillStyle = '#fffdf6';
+      eCtx.fillRect(4, bodyBottom + 13, w - 8, 4);
+
+      // 1Fショーウィンドウの暖かな光
+      const shopGlow = cfg.arch === 'retro_brick' ? '#ffd08a' : '#eef6ff';
+      for (let sx = 10; sx < w - 18; sx += 40) {
+        cCtx.fillStyle = shopGlow;
+        cCtx.globalAlpha = 0.68;
+        cCtx.fillRect(sx, bodyBottom + 20, 32, 30);
+        cCtx.globalAlpha = 1.0;
+
+        eCtx.fillStyle = shopGlow;
+        eCtx.globalAlpha = 0.72;
+        eCtx.fillRect(sx, bodyBottom + 20, 32, 30);
+      }
+      eCtx.globalAlpha = 1.0;
+    } else if (cfg.arch === 'factory') {
+      // 町工場・倉庫の大型スチールシャッター2連＋安全警戒ライン
+      for (const sx of [16, 140]) {
+        cCtx.fillStyle = '#7c8790';
+        cCtx.fillRect(sx, bodyBottom + 8, 98, 44);
+        cCtx.fillStyle = 'rgba(0,0,0,0.22)';
+        for (let sy = bodyBottom + 12; sy < h; sy += 4) {
+          cCtx.fillRect(sx, sy, 98, 1);
+        }
+        cCtx.fillStyle = '#d9a514';
+        cCtx.fillRect(sx, bodyBottom + 5, 98, 3);
+      }
+    } else if (cfg.arch.startsWith('house_')) {
+      // 下町戸建てのブロック塀・木目玄関ドア・玄関ポーチ灯
+      cCtx.fillStyle = cfg.arch === 'house_warm' ? '#8c857b' : '#4a5058';
+      cCtx.fillRect(0, bodyBottom + 18, w, 38);
+      cCtx.fillStyle = '#6b442a';
+      cCtx.fillRect(36, bodyBottom + 10, 26, 42);
+      // 玄関灯
+      eCtx.fillStyle = '#ffd27d';
+      eCtx.fillRect(66, bodyBottom + 14, 8, 10);
+      cCtx.fillStyle = '#ffe0a3';
+      cCtx.fillRect(66, bodyBottom + 14, 8, 10);
+    } else {
+      // マンション・団地の石貼りエントランスホール＆植栽帯
+      cCtx.fillStyle = '#3e4248';
+      cCtx.fillRect(0, bodyBottom, w, 56);
+      cCtx.fillStyle = '#ffdca2';
+      cCtx.globalAlpha = 0.65;
+      cCtx.fillRect(w * 0.36, bodyBottom + 12, w * 0.28, 38);
+      cCtx.globalAlpha = 1.0;
+      eCtx.fillStyle = '#ffdca2';
+      eCtx.globalAlpha = 0.62;
+      eCtx.fillRect(w * 0.36, bodyBottom + 12, w * 0.28, 38);
+      eCtx.globalAlpha = 1.0;
+      // 植栽グリーン帯
+      cCtx.fillStyle = '#2a422d';
+      cCtx.fillRect(6, h - 14, w * 0.26, 14);
+      cCtx.fillRect(w * 0.68, h - 14, w * 0.26, 14);
     }
 
     const wrap = (cvs, srgb) => {
       const t = new THREE.CanvasTexture(cvs);
       t.wrapS = THREE.RepeatWrapping;
-      t.wrapT = THREE.RepeatWrapping;
+      t.wrapT = THREE.ClampToEdgeWrapping;
       t.anisotropy = anisotropy;
       if (srgb) t.colorSpace = THREE.SRGBColorSpace;
       return t;
@@ -411,6 +833,83 @@ export function createBuildingFacadeVariants(anisotropy = 4) {
     };
   });
 }
+
+/**
+ * 雑居ビル袖看板・屋上広告塔用の内照式サインアトラス（4列×2段 = 全8種）
+ */
+export function createUrbanSignageTexture(anisotropy = 4) {
+  const w = 512;
+  const h = 512;
+  const colorCanvas = document.createElement('canvas');
+  colorCanvas.width = w;
+  colorCanvas.height = h;
+  const ctx = colorCanvas.getContext('2d');
+
+  const emissiveCanvas = document.createElement('canvas');
+  emissiveCanvas.width = w;
+  emissiveCanvas.height = h;
+  const eCtx = emissiveCanvas.getContext('2d');
+
+  const signs = [
+    { bg: '#f5c418', fg: '#15181c', accent: '#15181c', top: 'P 24H', lines: ['駐', '車', '場'] },
+    { bg: '#d92929', fg: '#ffffff', accent: '#ffdf4d', top: 'KARAOKE', lines: ['カ', 'ラ', 'オ', 'ケ'] },
+    { bg: '#1565c0', fg: '#ffffff', accent: '#7be3ff', top: 'CLINIC', lines: ['歯', '科', '・', '内', '科'] },
+    { bg: '#008c52', fg: '#ffffff', accent: '#b8ffcf', top: 'ESTATE', lines: ['不', '動', '産', '仲', '介'] },
+    { bg: '#eb6b18', fg: '#fffaf0', accent: '#361a08', top: 'DINING', lines: ['居', '酒', '屋', '・', '肴'] },
+    { bg: '#f4f6f9', fg: '#14284b', accent: '#d93228', top: 'ACADEMY', lines: ['進', '学', '予', '備', '校'] },
+    { bg: '#222834', fg: '#ffe082', accent: '#c99b3b', top: 'HOTEL', lines: ['ホ', 'テ', 'ル', '駅', '前'] },
+    { bg: '#00a2c7', fg: '#ffffff', accent: '#ffe600', top: 'DRUG', lines: ['処', '方', 'せ', 'ん', '薬'] },
+  ];
+
+  const cw = w / 4;
+  const ch = h / 2;
+
+  signs.forEach((s, idx) => {
+    const gx = (idx % 4) * cw;
+    const gy = Math.floor(idx / 4) * ch;
+
+    for (const target of [ctx, eCtx]) {
+      const isEm = target === eCtx;
+      target.save();
+      target.fillStyle = isEm ? '#08090b' : '#2a2e34';
+      target.fillRect(gx, gy, cw, ch);
+
+      target.fillStyle = s.bg;
+      target.globalAlpha = isEm ? 0.85 : 1.0;
+      target.fillRect(gx + 6, gy + 6, cw - 12, ch - 12);
+
+      target.fillStyle = s.accent;
+      target.fillRect(gx + 6, gy + 6, cw - 12, 36);
+
+      target.fillStyle = s.accent === '#15181c' || s.accent === '#361a08' ? '#ffffff' : '#111418';
+      target.font = '800 18px "Inter", sans-serif';
+      target.textAlign = 'center';
+      target.textBaseline = 'middle';
+      target.fillText(s.top, gx + cw * 0.5, gy + 24, cw - 20);
+
+      target.fillStyle = s.fg;
+      const stepY = (ch - 64) / s.lines.length;
+      target.font = `900 ${Math.min(36, Math.floor(stepY * 0.82))}px "Noto Sans JP", sans-serif`;
+      s.lines.forEach((chStr, li) => {
+        target.fillText(chStr, gx + cw * 0.5, gy + 54 + stepY * (li + 0.5));
+      });
+      target.restore();
+    }
+  });
+
+  const makeTex = (cvs) => {
+    const t = new THREE.CanvasTexture(cvs);
+    t.colorSpace = THREE.SRGBColorSpace;
+    t.anisotropy = anisotropy;
+    return t;
+  };
+
+  return {
+    map: makeTex(colorCanvas),
+    emissiveMap: makeTex(emissiveCanvas),
+  };
+}
+
 
 /**
  * JR東日本（常磐線快速 JJ）仕様の内照式駅名標テクスチャ生成
