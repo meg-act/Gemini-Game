@@ -1,0 +1,18 @@
+{
+  "name": "joban-line-simulator",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Photorealistic JR Joban Line (Nippori to Kita-Senju) First-Person Train Driving Simulator built with Three.js and Web Audio API",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0 --port 5173",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0 --port 5173"
+  },
+  "dependencies": {
+    "three": "^0.170.0"
+  },
+  "devDependencies": {
+    "vite": "^6.0.0"
+  }
+}

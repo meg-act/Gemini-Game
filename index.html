@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>JR常磐線 運転シミュレーター | 日暮里〜北千住 (Three.js Photorealistic Cab)</title>
+    <meta
+      name="description"
+      content="Three.js PBR・物理大気散乱・Web Audio APIによるJR常磐線（日暮里〜三河島〜南千住〜北千住 5.2km）一人称視点フォトリアル電車運転シミュレーター"
+    />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23009e52'/%3E%3Ctext x='16' y='22' font-family='sans-serif' font-size='15' font-weight='bold' fill='white' text-anchor='middle'%3EJJ%3C/text%3E%3C/svg%3E"
+    />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600;700&family=Noto+Sans+JP:wght@400;500;700&display=swap"
+      rel="stylesheet"
+      media="print"
+      onload="this.media='all'"
+    />
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <main id="app-root">
+      <canvas id="sim-canvas" aria-label="JR常磐線 3D運転席ビュー"></canvas>
+
+      <!-- 開始オーバーレイ（背景ではリアルタイム3D夕景をそのまま描画） -->
+      <section id="start-overlay" class="overlay-backdrop" aria-labelledby="sim-title">
+        <div class="start-panel">
+          <header class="start-header">
+            <p class="route-kicker">JR EAST JOBAN RAPID LINE · JJ02 → JJ05 · REAL SCALE 5.2 KM</p>
+            <h1 id="sim-title">JR常磐線 運転シミュレーター</h1>
+            <p class="route-subtitle">日暮里 ▸ 三河島 ▸ 南千住 ▸ 隅田川橋梁 ▸ 北千住</p>
+          </header>
+
+          <div class="config-grid">
+            <div class="config-group">
+              <label class="config-label">運転種別</label>
+              <div class="seg-buttons" id="service-select">
+                <button type="button" class="seg-btn active" data-service="rapid" id="btn-service-rapid">
+                  快速（各駅停車）
+                </button>
+                <button type="button" class="seg-btn" data-service="special_rapid" id="btn-service-special">
+                  特別快速（直行）
+                </button>
+              </div>
+            </div>
+
+            <div class="config-group">
+              <label class="config-label">空と光の時間帯</label>
+              <div class="seg-buttons" id="time-select">
+                <button type="button" class="seg-btn active" data-preset="magic_hour" id="btn-preset-magic">
+                  茜色マジックアワー
+                </button>
+                <button type="button" class="seg-btn" data-preset="golden_hour" id="btn-preset-golden">
+                  黄金色の夕暮れ
+                </button>
+                <button type="button" class="seg-btn" data-preset="twilight" id="btn-preset-twilight">
+                  群青の薄暮
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div class="controls-summary">
+            <div class="key-item"><kbd>S</kbd> / <kbd>↓</kbd> 手前に引く（ブレーキ解除・加速 P1〜P5）</div>
+            <div class="key-item"><kbd>W</kbd> / <kbd>↑</kbd> 奥に押す（力行解除・制動 B1〜B8）</div>
+            <div class="key-item"><kbd>Space</kbd> 惰行 (N) 戻し</div>
+            <div class="key-item"><kbd>BS</kbd> / <kbd>E</kbd> 非常ブレーキ (EB)</div>
+            <div class="key-item"><kbd>H</kbd> / <kbd>Enter</kbd> 警笛</div>
+            <div class="key-item"><kbd>D</kbd> 停車時ドア開閉 · <kbd>F</kbd> 発車メロディ</div>
+            <div class="key-item"><kbd>V</kbd> 視点切替 · <kbd>P</kbd> 別窓計器パネル (SideCar)</div>
+            <div class="key-item"><kbd>T</kbd> ザ・ワールド（時間停止・自由カメラ）</div>
+          </div>
+
+          <button type="button" id="btn-start-drive" class="primary-drive-btn">
+            運転席に着く（音声エンジン起動）
+          </button>
+        </div>
+      </section>
+
+      <!-- 運転中の控えめなミニマルHUD（Tabキーで完全非表示可能） -->
+      <div id="hud-layer" class="hud-layer hidden">
+        <!-- 上部：環境・区間ジャンプ・視点バー -->
+        <header class="hud-topbar">
+          <div class="route-status-bar">
+            <span class="line-badge" id="hud-line-badge">JJ 快速</span>
+            <span class="section-label" id="hud-zone-label">日暮里駅構内</span>
+          </div>
+
+          <div class="toolbar-controls">
+            <select id="hud-jump-select" aria-label="区間ジャンプ" title="任意の区間へ移動">
+              <option value="" disabled selected>区間移動...</option>
+              <option value="0">日暮里駅 4番線 発車 (0.0 km)</option>
+              <option value="125">日暮里 片渡り分岐・14線コリドー (0.1 km)</option>
+              <option value="220">日暮里〜三河島 大カーブ手前 (0.2 km)</option>
+              <option value="1200">三河島駅 1番線 (1.2 km)</option>
+              <option value="2460">南千住ガスタンク・隅田川貨物駅 (2.5 km)</option>
+              <option value="3400">南千住駅 1番線・スカイツリー遠望 (3.4 km)</option>
+              <option value="3780">隅田川橋梁 アプローチ (3.8 km)</option>
+              <option value="4820">北千住駅 2面3線 進入分岐 (4.8 km)</option>
+            </select>
+
+            <select id="hud-atmosphere-select" aria-label="時間帯切替">
+              <option value="magic_hour">茜色マジックアワー</option>
+              <option value="golden_hour">黄金色の夕暮れ</option>
+              <option value="twilight">群青の薄暮</option>
+            </select>
+
+            <button
+              type="button"
+              id="btn-toggle-world"
+              class="hud-tool-btn world-btn"
+              title="時間停止＋自由カメラ (T)"
+            >
+              ザ・ワールド (T)
+            </button>
+            <button type="button" id="btn-toggle-view" class="hud-tool-btn" title="視点切替 (V)">
+              視点: 運転席
+            </button>
+            <button
+              type="button"
+              id="btn-popout-panel"
+              class="hud-tool-btn"
+              title="E531計器パネルを別ウィンドウで開く（前面展望＋SideCar対応） (P)"
+            >
+              別窓計器 (P)
+            </button>
+            <button type="button" id="btn-toggle-mute" class="hud-tool-btn" title="音声ミュート切替 (M)">
+              音: ON
+            </button>
+            <button type="button" id="btn-toggle-hud" class="hud-tool-btn" title="HUD表示切替 (Tab)">
+              計器UI非表示
+            </button>
+          </div>
+        </header>
+
+        <!-- 駅停車・案内トースト（スコアなし・純粋な停止位置と路線案内のみ） -->
+        <div id="status-toast" class="status-toast hidden" role="status" aria-live="polite"></div>
+
+        <!-- ザ・ワールド（時間停止＋スペクテイター）専用ボトムバー -->
+        <div id="the-world-banner" class="the-world-banner hidden" role="status" aria-live="polite">
+          <div class="world-title-row">
+            <span class="world-badge">THE WORLD · 時間停止中</span>
+            <span class="world-speed">移動速度 <strong id="world-speed-text">16</strong> m/s</span>
+          </div>
+          <div class="world-hints">
+            <span><kbd>WASD</kbd> 移動</span>
+            <span><kbd>E</kbd>/<kbd>Space</kbd> 上昇</span>
+            <span><kbd>Q</kbd>/<kbd>C</kbd> 下降</span>
+            <span><kbd>ドラッグ</kbd> 視点回転</span>
+            <span><kbd>ホイール</kbd> 速度変更</span>
+            <span><kbd>Shift</kbd> 高速 · <kbd>Alt</kbd> 微速</span>
+            <span><kbd>T</kbd>/<kbd>Esc</kbd> 解除</span>
+          </div>
+        </div>
+
+        <!-- 下部左右：マウスでも操作できるワンハンドルノッチバー ＆ 最小限デジタル計器 -->
+        <footer class="hud-bottombar" id="hud-bottombar">
+          <div class="mascon-widget" aria-label="ワンハンドルマスコン操作">
+            <div class="mascon-header">
+              <span class="mascon-title">MASCON</span>
+              <span class="mascon-current" id="hud-notch-text">B4</span>
+            </div>
+            <div class="notch-ladder" id="notch-ladder"></div>
+            <div class="cab-quick-actions">
+              <button type="button" id="btn-horn" class="quick-btn" title="警笛 (H / Enter)">警笛</button>
+              <button type="button" id="btn-melody" class="quick-btn" title="駅発車メロディ (F)">発車メロ</button>
+              <button type="button" id="btn-doors" class="quick-btn" title="ドア開閉 (D)">扉閉</button>
+            </div>
+          </div>
+
+          <div class="telemetry-cluster">
+            <div class="tele-block">
+              <span class="tele-label">次停車駅</span>
+              <div class="tele-station-row">
+                <span class="tele-station" id="hud-next-station">三河島</span>
+                <span class="tele-dist" id="hud-next-dist">1,200 m</span>
+              </div>
+              <div class="stop-bar-wrap" id="stop-bar-wrap">
+                <div class="stop-bar-target"></div>
+                <div class="stop-bar-marker" id="stop-bar-marker"></div>
+              </div>
+            </div>
+
+            <div class="tele-divider"></div>
+
+            <div class="tele-block speed-block">
+              <div class="speed-main">
+                <span class="speed-num" id="hud-speed">0.0</span>
+                <span class="speed-unit">km/h</span>
+              </div>
+              <div class="sub-metrics">
+                <span>制限 <strong id="hud-limit">55</strong></span>
+                <span>BC <strong id="hud-bc">195</strong> kPa</span>
+                <span>勾配 <strong id="hud-grade">0.0</strong>‰</span>
+              </div>
+            </div>
+          </div>
+        </footer>
+      </div>
+
+      <!-- HUD完全非表示時の復帰ヒント -->
+      <button type="button" id="btn-restore-hud" class="restore-hud-btn hidden" title="HUDを再表示 (Tab)">
+        HUD表示 (Tab)
+      </button>
+    </main>
+
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>
