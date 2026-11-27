@@ -277,8 +277,12 @@ function drawAnnunciatorMatrix(ctx, w, h, state) {
   const rem = state.remainingMeters ?? 9999;
   const spd = state.speedKmh || 0;
   const lim = state.speedLimit || 100;
-  const patternNear = spd > lim - 2.5 || (rem > -15 && rem < 160 && spd > 28);
-  const atsBrakeOn = spd > lim + 2.5;
+  const patternNear =
+    state.atsPatternApproach !== undefined
+      ? Boolean(state.atsPatternApproach)
+      : spd > lim - 2.5 || (rem > -15 && rem < 160 && spd > 28);
+  const atsBrakeOn =
+    state.atsBrakeActive !== undefined ? Boolean(state.atsBrakeActive) : spd > lim + 2.5;
 
   const row1Defs = [
     { cols: ['P電源'], state: 'green' },
@@ -358,7 +362,7 @@ function drawAnnunciatorMatrix(ctx, w, h, state) {
     { cols: [], blank: true },
     { cols: ['三相'] },
     { cols: ['非常短絡'] },
-    { cols: ['耐雪', 'ブレーキ'] },
+    { cols: ['耐雪', 'ブレーキ'], lit: Boolean(state.snowBrake) },
     { cols: ['直通予備'] },
     { cols: ['定速'] },
     { cols: ['駐車ブレーキ'], parking: true },
@@ -384,20 +388,29 @@ function drawAnnunciatorMatrix(ctx, w, h, state) {
       return;
     }
 
-    ctx.fillStyle = '#474f5a';
-    ctx.fillRect(sx, r2Y, slotW2, r2H);
-    ctx.strokeStyle = 'rgba(30, 35, 42, 0.55)';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(sx, r2Y, slotW2, r2H);
+    if (item.lit) {
+      ctx.fillStyle = '#fff2c2';
+      ctx.fillRect(sx, r2Y, slotW2, r2H);
+      ctx.strokeStyle = '#ffdf88';
+      ctx.lineWidth = 1.6;
+      ctx.strokeRect(sx + 1, r2Y + 1, slotW2 - 2, r2H - 2);
+    } else {
+      ctx.fillStyle = '#474f5a';
+      ctx.fillRect(sx, r2Y, slotW2, r2H);
+      ctx.strokeStyle = 'rgba(30, 35, 42, 0.55)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(sx, r2Y, slotW2, r2H);
+    }
 
+    const r2Fg = item.lit ? '#1c2228' : '#eef3f8';
     if (item.cols.length === 1) {
       const txt = item.cols[0];
       const fpx = Math.max(9, Math.round(Math.min(slotW2 * 0.44, (r2H * 0.82) / Math.max(2.3, txt.length))));
-      drawVerticalChars(ctx, txt, sx + slotW2 * 0.5, r2Y + r2H * 0.10, r2Y + r2H * 0.90, fpx, '#eef3f8');
+      drawVerticalChars(ctx, txt, sx + slotW2 * 0.5, r2Y + r2H * 0.10, r2Y + r2H * 0.90, fpx, r2Fg);
     } else {
       const fpx = Math.max(8, Math.round(Math.min(slotW2 * 0.36, r2H * 0.18)));
-      drawVerticalChars(ctx, item.cols[0], sx + slotW2 * 0.68, r2Y + r2H * 0.14, r2Y + r2H * 0.62, fpx, '#eef3f8');
-      drawVerticalChars(ctx, item.cols[1], sx + slotW2 * 0.32, r2Y + r2H * 0.14, r2Y + r2H * 0.90, fpx, '#eef3f8');
+      drawVerticalChars(ctx, item.cols[0], sx + slotW2 * 0.68, r2Y + r2H * 0.14, r2Y + r2H * 0.62, fpx, r2Fg);
+      drawVerticalChars(ctx, item.cols[1], sx + slotW2 * 0.32, r2Y + r2H * 0.14, r2Y + r2H * 0.90, fpx, r2Fg);
     }
   });
 
@@ -743,6 +756,23 @@ function drawMainSpeedometer(ctx, w, h, state) {
     ctx.moveTo(radius * 1.06, 0);
     ctx.lineTo(radius * 1.13, -radius * 0.035);
     ctx.lineTo(radius * 1.13, radius * 0.035);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // ATS-P 連続照査パターン速度アンバー指標（減速パターン発生時や接近時に視認できる実車ライクな橙色インデックス！）
+  if (state.atsPatternSpeedKmh !== undefined && state.atsPatternSpeedKmh < 142) {
+    const patFrac = Math.max(0, Math.min(1, state.atsPatternSpeedKmh / maxSpd));
+    const patAng = startAng + patFrac * sweepAng;
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(patAng);
+    ctx.fillStyle = state.atsBrakeActive ? '#ff483b' : '#ffb82e';
+    ctx.beginPath();
+    ctx.moveTo(radius * 0.90, 0);
+    ctx.lineTo(radius * 0.82, -radius * 0.036);
+    ctx.lineTo(radius * 0.82, radius * 0.036);
     ctx.closePath();
     ctx.fill();
     ctx.restore();

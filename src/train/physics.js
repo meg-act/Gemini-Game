@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { STATIONS, ROUTE_TOTAL_LENGTH } from '../world/routeData.js';
+import { STATIONS, SPEED_LIMITS, ROUTE_TOTAL_LENGTH } from '../world/routeData.js';
 
 /**
  * ワンハンドルマスコン全15段定義（index 0 = EB 〜 index 14 = P5）
@@ -25,12 +25,15 @@ export const NOTCH_STEPS = [
 export const NEUTRAL_INDEX = 9;
 
 /**
- * JR東日本 E531系・E231系（常磐線快速 15両編成相当）縦方向運動・空気ブレーキ・台車継目トラッカー
+ * JR東日本 E531系・E231系（常磐線快速 15両編成相当）縦方向運動・空気ブレーキ・ATS-P連続パターン・雨天粘着・台車継目トラッカー
  */
 export class TrainPhysics {
   constructor(route) {
     this.route = route;
     this.serviceType = 'rapid'; // 'rapid' (各駅停車: 全4駅) | 'special_rapid' (特快: 日暮里→北千住直行)
+    this.isRaining = false;
+    this.snowBrake = false;
+    this._turnoutPoints = [46, 96, 156, 4848, 4928, 5260];
 
     this._jointPositions = this._generateRailJoints();
     this.reset(0);
@@ -63,6 +66,16 @@ export class TrainPhysics {
     this.serviceType = type;
   }
 
+  setWeatherRain(raining) {
+    this.isRaining = Boolean(raining);
+    this.snowBrake = Boolean(raining);
+  }
+
+  toggleSnowBrake() {
+    this.snowBrake = !this.snowBrake;
+    return this.snowBrake;
+  }
+
   getScheduledStations() {
     return STATIONS.filter((st) =>
       this.serviceType === 'special_rapid' ? st.stopSpecialRapid : st.stopRapid
@@ -81,9 +94,46 @@ export class TrainPhysics {
     this.doorsOpen = false;        // 初期状態は戸閉完了（すぐ発車可能）
     this.motorEffort = 0;          // -1.0 (最大回生) 〜 +1.0 (最大力行)
 
+    this.atsPatternSpeedKmh = this._computeAtsPatternSpeedKmh(startDistance);
+    this.atsPatternApproach = false;
+    this.atsBrakeActive = false;
+    this.wheelSlip = 0;
+
+    this._prevDistance = startDistance;
     this._prevAxle1 = startDistance - 2.1;
     this._prevAxle2 = startDistance - 4.2;
     this._prevTargetBc = 195;
+  }
+
+  /**
+   * ATS-P 連続照査速度パターン (km/h) の算出
+   * 現在区間の制限速度、前方650m以内の下位速度制限区間、および北千住終端過走防止パターンを統合照査
+   */
+  _computeAtsPatternSpeedKmh(d) {
+    const curLimObj = this.route.getSpeedLimitAt(d);
+    const curLimit = curLimObj ? curLimObj.limit : 95;
+    let patternKmh = curLimit + 3.0; // 実車ATS-Pの常用パターン照査マージン (+3 km/h)
+    const aPat = 0.88; // パターン減速度 (m/s^2 ≒ 3.17 km/h/s)
+
+    for (let i = 0; i < SPEED_LIMITS.length; i++) {
+      const sl = SPEED_LIMITS[i];
+      if (sl.start > d && sl.start - d < 650 && sl.limit < curLimit) {
+        const distAhead = Math.max(0, sl.start - d - 8.0);
+        const vTargetMps = (sl.limit + 2.5) / 3.6;
+        const vPatKmh = 3.6 * Math.sqrt(vTargetMps * vTargetMps + 2 * aPat * distAhead);
+        if (vPatKmh < patternKmh) patternKmh = vPatKmh;
+      }
+    }
+
+    // 北千住1番線 終端過走防止0km/hパターン（5,200m停止目標の48m奥＝5,248mを終端防護点に設定）
+    const terminalGuardD = ROUTE_TOTAL_LENGTH + 48;
+    if (d > terminalGuardD - 620) {
+      const remTerm = Math.max(0, terminalGuardD - d);
+      const vTermKmh = 3.6 * Math.sqrt(2 * aPat * remTerm);
+      if (vTermKmh < patternKmh) patternKmh = vTermKmh;
+    }
+
+    return Math.max(0, Math.min(140, patternKmh));
   }
 
   get currentNotch() {
@@ -173,15 +223,38 @@ export class TrainPhysics {
   }
 
   /**
-   * 毎フレーム物理積分・台車ジョイント通過イベント生成
+   * 毎フレーム物理積分・ATS-P照査・雨天粘着・分岐器横揺れ・停止カックン判定
    */
   update(dt, callbacks = {}) {
     const safeDt = Math.min(dt, 0.05);
     const notch = this.currentNotch;
     const frame = this.route.getFrameAt(this.distance);
 
-    // 1. 空気ブレーキ圧 (BC) の一次遅れ応答 & 緩解排気音トリガー
-    const targetBc = notch.targetBcKpa;
+    // 0. ATS-P 連続速度パターン照査
+    this.atsPatternSpeedKmh = this._computeAtsPatternSpeedKmh(this.distance);
+    const prevApproach = this.atsPatternApproach;
+    this.atsPatternApproach =
+      this.atsBrakeActive ||
+      (this.speedKmh > 4.0 && this.speedKmh >= this.atsPatternSpeedKmh - 5.0);
+
+    if (!this.atsBrakeActive && this.speedKmh > this.atsPatternSpeedKmh + 0.4) {
+      this.atsBrakeActive = true;
+      if (callbacks.onAtsEvent) callbacks.onAtsEvent({ type: 'brake_apply' });
+    } else if (
+      this.atsBrakeActive &&
+      this.speedKmh <= Math.max(0, this.atsPatternSpeedKmh - 4.0)
+    ) {
+      this.atsBrakeActive = false;
+      if (callbacks.onAtsEvent) callbacks.onAtsEvent({ type: 'brake_release' });
+    } else if (!prevApproach && this.atsPatternApproach && callbacks.onAtsEvent) {
+      callbacks.onAtsEvent({ type: 'pattern_approach' });
+    }
+
+    // 1. 空気ブレーキ圧 (BC) の一次遅れ応答 & 耐雪ブレーキ最低圧保持 & ATS-P常用最大指令
+    const snowHoldKpa = this.snowBrake && this.speedKmh > 4.0 ? 26 : 0;
+    const atsCommandKpa = this.atsBrakeActive ? 355 : 0;
+    const targetBc = Math.max(notch.targetBcKpa, snowHoldKpa, atsCommandKpa);
+
     if (targetBc < this._prevTargetBc - 45 && this.bcPressure > 60) {
       const releaseStrength = Math.min(1.0, (this.bcPressure - targetBc) / 340);
       if (callbacks.onBrakeAirRelease) callbacks.onBrakeAirRelease(releaseStrength);
@@ -189,8 +262,8 @@ export class TrainPhysics {
     this._prevTargetBc = targetBc;
 
     const bcRate =
-      notch.type === 'eb'
-        ? 410 // 非常ブレーキは急速立ち上がり
+      notch.type === 'eb' || this.atsBrakeActive
+        ? 410 // 非常またはATS-P常用最大は急速立ち上がり
         : targetBc > this.bcPressure
           ? 235 // 込め速度 (kPa/s)
           : 265; // 緩め速度 (kPa/s)
@@ -207,41 +280,51 @@ export class TrainPhysics {
       this.mrPressure = Math.min(865, this.mrPressure + safeDt * 6.5);
     }
 
-    // 2. VVVF主電動機 引張力加速度 (m/s^2)
-    // E531系・E231系: P5起動加速度 2.5 km/h/s (= 0.694 m/s^2)
+    // 2. VVVF主電動機 引張力加速度 (m/s^2) ＋ 雨天時の微小空転再粘着制御
     let tractiveAccel = 0;
-    if (notch.type === 'power' && !this.doorsOpen) {
+    if (notch.type === 'power' && !this.doorsOpen && !this.atsBrakeActive) {
       const notchFactor = [0, 0.24, 0.45, 0.66, 0.84, 1.0][notch.level];
       const baseAccel = 0.70 * notchFactor; // m/s^2
-      // 36 km/h まで定トルク、以降は定出力・特性領域で滑らかに減衰
       let speedCurve = 1.0;
       if (this.speedKmh > 36) {
         speedCurve = Math.pow(36 / this.speedKmh, 0.78);
       }
-      // P1〜P3 での均衡速度リミット感
       const maxBalanceKmh = 38 + notch.level * 20; // P1:58 .. P5:138 km/h
       if (this.speedKmh > maxBalanceKmh) {
         speedCurve *= Math.max(0, 1 - (this.speedKmh - maxBalanceKmh) / 15);
       }
-      tractiveAccel = baseAccel * speedCurve;
+      if (this.isRaining && notch.level >= 4 && this.speedKmh < 34) {
+        const slipPulse = 0.5 + 0.5 * Math.sin(this.distance * 1.9 + this.speedMps * 8.0);
+        this.wheelSlip = THREE.MathUtils.lerp(this.wheelSlip, 0.08 + 0.07 * slipPulse, safeDt * 6.0);
+      } else {
+        this.wheelSlip = THREE.MathUtils.lerp(this.wheelSlip, 0, safeDt * 8.0);
+      }
+      tractiveAccel = baseAccel * speedCurve * (1.0 - this.wheelSlip * 0.65);
       this.motorEffort = THREE.MathUtils.lerp(this.motorEffort, notchFactor, safeDt * 5.0);
-    } else if (notch.type === 'brake' && this.speedKmh > 7.5) {
-      // 電気指令式・回生ブレーキ併用（7.5km/h以下で純空気ブレーキへフェードアウト＝電制失効再現）
+    } else if ((notch.type === 'brake' || this.atsBrakeActive) && this.speedKmh > 7.5) {
+      this.wheelSlip = THREE.MathUtils.lerp(this.wheelSlip, 0, safeDt * 8.0);
+      const effLevel = this.atsBrakeActive ? 7.2 : notch.level;
       const regenFade = THREE.MathUtils.clamp((this.speedKmh - 7.5) / 8.0, 0, 1);
-      const regenLevel = -(notch.level / 8.0) * regenFade;
+      const regenLevel = -(effLevel / 8.0) * regenFade;
       this.motorEffort = THREE.MathUtils.lerp(this.motorEffort, regenLevel, safeDt * 6.0);
     } else {
+      this.wheelSlip = THREE.MathUtils.lerp(this.wheelSlip, 0, safeDt * 8.0);
       this.motorEffort = THREE.MathUtils.lerp(this.motorEffort, 0, safeDt * 7.0);
     }
 
-    // 3. 制動減速度 (m/s^2) — B8常用最大 約 4.0 km/h/s (1.11 m/s^2), EB 約 4.9 km/h/s (1.36 m/s^2)
-    const brakeDecel = (this.bcPressure / 395) * 1.11;
+    // 3. 制動減速度 (m/s^2) — 耐雪ブレーキ単体(26kPa)の制輪子予熱圧は走行減速にはほぼ寄与させず実車通り軽快に
+    const effectiveRetardBc =
+      notch.type === 'power' || notch.type === 'neutral'
+        ? this.atsBrakeActive
+          ? this.bcPressure
+          : Math.max(0, this.bcPressure - snowHoldKpa)
+        : this.bcPressure;
+    const wetBrakeFactor = this.isRaining ? (this.snowBrake ? 0.94 : 0.86) : 1.0;
+    const brakeDecel = (effectiveRetardBc / 395) * 1.11 * wetBrakeFactor;
 
     // 4. 走行抵抗 + 曲線抵抗 + 勾配抵抗 (m/s^2)
-    // Davis式近似: a + b*V + c*V^2
     const rollingDrag = 0.014 + 0.00018 * this.speedKmh + 0.000014 * this.speedKmh * this.speedKmh;
     const curveDrag = Math.abs(frame.curvature) * 8.5;
-    // 勾配抵抗: 1‰ あたり g/1000 ≒ 0.0098 m/s^2（上り勾配で減速、下り勾配で加速）
     const gradeAccel = -(frame.gradient * 0.0098);
 
     // 合成縦加速度
@@ -249,7 +332,6 @@ export class TrainPhysics {
     if (this.speedMps > 0.001) {
       netAccel -= brakeDecel + rollingDrag + curveDrag;
     } else {
-      // 停止保持判定（ブレーキまたは抵抗が下り勾配力に勝っていれば完全静止）
       const holdForce = brakeDecel + rollingDrag;
       if (netAccel <= holdForce) {
         netAccel = 0;
@@ -261,16 +343,37 @@ export class TrainPhysics {
 
     const prevSpeed = this.speedMps;
     this.speedMps = Math.max(0, this.speedMps + netAccel * safeDt);
-    // 終端過走防止安全ストッパ (5,440m 付近でATS自動非常制動)
+    // 終端過走防止安全ストッパ
     if (this.distance > ROUTE_TOTAL_LENGTH + 220 && this.notchIndex > 0) {
       this.notchIndex = 0;
     }
 
+    // 停止瞬間の静摩擦ロック反動（「階段緩め」をしないとカックンと頭が沈んで戻る実車挙動！）
+    if (prevSpeed > 0.025 && this.speedMps === 0 && callbacks.onStopJerk) {
+      callbacks.onStopJerk(this.bcPressure);
+    }
+
     this.accelerationMps2 = (this.speedMps - prevSpeed) / Math.max(0.0001, safeDt);
     this.speedKmh = this.speedMps * 3.6;
+    const prevDist = this.distance;
     this.distance += this.speedMps * safeDt;
 
-    // 5. 前台車2軸 (先頭より -2.1m, -4.2m) のレール継目通過判定 -> リアルな「ガタン・ゴトン」発生！
+    // 5. 分岐器ポイント通過時の横方向スラスト揺れイベント
+    if (this.distance > prevDist) {
+      for (let i = 0; i < this._turnoutPoints.length; i++) {
+        const tp = this._turnoutPoints[i];
+        if (prevDist < tp && this.distance >= tp) {
+          if (callbacks.onTurnoutJolt) {
+            const dir = i % 2 === 0 ? 1 : -1;
+            const strength = dir * THREE.MathUtils.clamp(this.speedKmh / 55, 0.25, 1.15);
+            callbacks.onTurnoutJolt(strength);
+          }
+        }
+      }
+    }
+    this._prevDistance = this.distance;
+
+    // 6. 前台車2軸 (先頭より -2.1m, -4.2m) のレール継目通過判定 -> リアルな「ガタン・ゴトン」発生！
     const axle1 = this.distance - 2.1;
     const axle2 = this.distance - 4.2;
 
@@ -289,6 +392,12 @@ export class TrainPhysics {
       bcPressure: this.bcPressure,
       mrPressure: this.mrPressure,
       motorEffort: this.motorEffort,
+      atsPatternSpeedKmh: this.atsPatternSpeedKmh,
+      atsPatternApproach: this.atsPatternApproach,
+      atsBrakeActive: this.atsBrakeActive,
+      snowBrake: this.snowBrake,
+      isRaining: this.isRaining,
+      wheelSlip: this.wheelSlip,
       frame,
       zone: this.route.getTrackZoneAt(this.distance),
     };

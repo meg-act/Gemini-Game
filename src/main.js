@@ -6,6 +6,8 @@ import {
   createPlatformSurfaceTexture,
   createBuildingFacadeVariants,
   createWaterNormalTexture,
+  createUrbanStreetGridTexture,
+  createArterialRoadTexture,
 } from './world/textures.js';
 import { AtmosphereAndPost } from './world/skyAndPost.js';
 import { TrackSystem } from './world/trackBuilder.js';
@@ -13,6 +15,7 @@ import { ScenerySystem } from './world/sceneryBuilder.js';
 import { TrainPhysics, NOTCH_STEPS, NEUTRAL_INDEX } from './train/physics.js';
 import { DriverCabView } from './train/cabView.js';
 import { TrainSoundEngine } from './audio/soundEngine.js';
+import { AnnouncementAndCalloutSystem } from './audio/announcements.js';
 import { drawDriverMeterScreen } from './ui/meterRenderer.js';
 
 // --- DOM 要素参照 ---
@@ -22,11 +25,15 @@ const btnStartDrive = document.getElementById('btn-start-drive');
 const hudLayer = document.getElementById('hud-layer');
 const btnRestoreHud = document.getElementById('btn-restore-hud');
 const statusToast = document.getElementById('status-toast');
+const commsCaption = document.getElementById('comms-caption');
 
 const hudLineBadge = document.getElementById('hud-line-badge');
 const hudZoneLabel = document.getElementById('hud-zone-label');
 const hudJumpSelect = document.getElementById('hud-jump-select');
 const hudAtmosphereSelect = document.getElementById('hud-atmosphere-select');
+const btnToggleWeather = document.getElementById('btn-toggle-weather');
+const btnToggleWiper = document.getElementById('btn-toggle-wiper');
+const btnToggleBeam = document.getElementById('btn-toggle-beam');
 const btnToggleWorld = document.getElementById('btn-toggle-world');
 const btnToggleView = document.getElementById('btn-toggle-view');
 const btnPopoutPanel = document.getElementById('btn-popout-panel');
@@ -80,6 +87,8 @@ const textures = {
   platformTop: createPlatformSurfaceTexture(maxAniso),
   buildingFacades: createBuildingFacadeVariants(Math.min(4, maxAniso)),
   waterNormal: createWaterNormalTexture(),
+  urbanGround: createUrbanStreetGridTexture(maxAniso),
+  arterialRoad: createArterialRoadTexture(maxAniso),
 };
 
 const route = new RouteGeometry();
@@ -95,12 +104,14 @@ scenery.setWindowGlowMultiplier(atmosphere.currentPreset.windowGlowMultiplier);
 const physics = new TrainPhysics(route);
 const cabView = new DriverCabView(scene, camera);
 const sound = new TrainSoundEngine();
+const announcements = new AnnouncementAndCalloutSystem(sound, commsCaption);
 
 // --- アプリケーション状態 ---
 let isDrivingStarted = false;
 let isHudVisible = true;
 let wasMovingSinceStop = false;
 let toastTimeoutId = null;
+let lastAtosCloseMs = -99999;
 
 function showToast(message, durationMs = 4200) {
   statusToast.textContent = message;
@@ -116,6 +127,44 @@ function getNotchClickKind(notch) {
   if (notch.type === 'eb') return 'eb';
   if (notch.type === 'neutral') return 'neutral';
   return 'normal';
+}
+
+function syncWeatherAndLightButtons() {
+  const isRain = atmosphere.weatherMode === 'rain';
+  if (btnToggleWeather) {
+    btnToggleWeather.textContent = isRain ? '天候: 雨天 (R)' : '天候: 晴 (R)';
+    btnToggleWeather.classList.toggle('rain-active', isRain);
+  }
+  if (btnToggleWiper) {
+    btnToggleWiper.textContent = cabView.wiperActive ? 'ワイパー: ON' : 'ワイパー: OFF';
+    btnToggleWiper.classList.toggle('rain-active', cabView.wiperActive);
+  }
+  if (btnToggleBeam) {
+    btnToggleBeam.textContent = cabView.headlightMode === 'high' ? '前照灯: 強' : '前照灯: 減光';
+  }
+  document.querySelectorAll('#weather-select .seg-btn').forEach((b) => {
+    b.classList.toggle('active', b.dataset.weather === (isRain ? 'rain' : 'clear'));
+  });
+}
+
+function applyWeatherMode(mode, { silentToast = false } = {}) {
+  const isRain = mode === 'rain';
+  atmosphere.setWeather(isRain ? 'rain' : 'clear');
+  trackSystem.setWetness(isRain ? 1.0 : 0.0);
+  scenery.setWetness(isRain ? 1.0 : 0.0);
+  physics.setWeatherRain(isRain);
+  cabView.setWeatherRain(isRain);
+  sound.setRainIntensity(isRain ? 1.0 : 0.0);
+  syncWeatherAndLightButtons();
+  broadcastCockpitTelemetry(null, true);
+  if (!silentToast && isDrivingStarted) {
+    showToast(
+      isRain
+        ? '雨天モード：ワイパー・耐雪ブレーキ作動（レール湿潤につき制動距離にご注意ください）'
+        : '晴天（ドライレール）モードへ切り替えました',
+      3800
+    );
+  }
 }
 
 // --- ノッチラダー UI 構築（マウスクリックでも直接ノッチ投入可能） ---
@@ -182,6 +231,15 @@ document.getElementById('time-select').addEventListener('click', (e) => {
   hudAtmosphereSelect.value = preset;
 });
 
+const weatherSelectEl = document.getElementById('weather-select');
+if (weatherSelectEl) {
+  weatherSelectEl.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-weather]');
+    if (!btn) return;
+    applyWeatherMode(btn.dataset.weather, { silentToast: true });
+  });
+}
+
 function startDrivingSession() {
   if (isDrivingStarted) return;
   isDrivingStarted = true;
@@ -235,6 +293,7 @@ function setTheWorld(active, { silentToast = false } = {}) {
 
     cabView.cabInterior.visible = false;
     sound.setTimeStopped(true);
+    announcements.cancelAll();
 
     btnToggleWorld.classList.add('active');
     btnToggleWorld.textContent = '時間停止中 (Tで解除)';
@@ -313,6 +372,11 @@ function buildCockpitTelemetry(physState) {
     bcPressure: physics.bcPressure,
     mrPressure: physics.mrPressure,
     motorEffort: physics.motorEffort,
+    atsPatternSpeedKmh: physics.atsPatternSpeedKmh,
+    atsPatternApproach: physics.atsPatternApproach,
+    atsBrakeActive: physics.atsBrakeActive,
+    snowBrake: physics.snowBrake,
+    isRaining: physics.isRaining,
     frame: route.getFrameAt(physics.distance),
     zone: route.getTrackZoneAt(physics.distance),
   };
@@ -326,6 +390,12 @@ function buildCockpitTelemetry(physState) {
     type: 'telemetry',
     speedKmh: st.speedKmh,
     speedLimit: speedLimitObj.limit,
+    atsPatternSpeedKmh: st.atsPatternSpeedKmh ?? physics.atsPatternSpeedKmh,
+    atsPatternApproach: Boolean(st.atsPatternApproach ?? physics.atsPatternApproach),
+    atsBrakeActive: Boolean(st.atsBrakeActive ?? physics.atsBrakeActive),
+    snowBrake: Boolean(st.snowBrake ?? physics.snowBrake),
+    isRaining: Boolean(st.isRaining ?? physics.isRaining),
+    headlightMode: cabView.headlightMode,
     notchIndex: physics.notchIndex,
     notchId: notch.id,
     notchType: notch.type,
@@ -694,6 +764,18 @@ function handleIncomingCockpitMessage(data) {
       case 'toggleWorld':
         setTheWorld(!isTheWorldActive);
         break;
+      case 'toggleWeather':
+        applyWeatherMode(atmosphere.weatherMode === 'rain' ? 'clear' : 'rain');
+        break;
+      case 'toggleWiper':
+        handleToggleWiper();
+        break;
+      case 'toggleBeam':
+        handleToggleBeam();
+        break;
+      case 'toggleSnowBrake':
+        handleToggleSnowBrake();
+        break;
       default:
         break;
     }
@@ -726,8 +808,10 @@ hudJumpSelect.addEventListener('change', (e) => {
       showToast(`自由カメラを ${zone.label} (${(targetD / 1000).toFixed(1)} km) へ移動しました`, 2800);
     } else {
       physics.reset(targetD);
+      announcements.reset(targetD);
       wasMovingSinceStop = false;
       sound.stopDepartureMelody();
+      sound.setAtsChimeActive(false);
       syncNotchHud();
       syncDoorButton();
       broadcastCockpitTelemetry(null, true);
@@ -742,6 +826,53 @@ hudAtmosphereSelect.addEventListener('change', (e) => {
   atmosphere.applyPreset(e.target.value);
   e.target.blur();
 });
+
+function handleToggleWeather() {
+  sound.init();
+  applyWeatherMode(atmosphere.weatherMode === 'rain' ? 'clear' : 'rain');
+}
+if (btnToggleWeather) {
+  btnToggleWeather.addEventListener('click', () => {
+    handleToggleWeather();
+    btnToggleWeather.blur();
+  });
+}
+
+function handleToggleWiper() {
+  sound.init();
+  const active = cabView.toggleWiper();
+  sound.playWiperBlade(1);
+  syncWeatherAndLightButtons();
+  showToast(active ? 'フロントワイパー：動作開始 (Y)' : 'フロントワイパー：停止・格納 (Y)', 2200);
+}
+if (btnToggleWiper) {
+  btnToggleWiper.addEventListener('click', () => {
+    handleToggleWiper();
+    btnToggleWiper.blur();
+  });
+}
+
+function handleToggleBeam() {
+  const mode = cabView.toggleHeadlightBeam();
+  syncWeatherAndLightButtons();
+  broadcastCockpitTelemetry(null, true);
+  showToast(
+    mode === 'high' ? '前照灯：ハイビーム（遠方照射）' : '前照灯：ロービーム（対向列車すれ違い減光）',
+    2200
+  );
+}
+if (btnToggleBeam) {
+  btnToggleBeam.addEventListener('click', () => {
+    handleToggleBeam();
+    btnToggleBeam.blur();
+  });
+}
+
+function handleToggleSnowBrake() {
+  const on = physics.toggleSnowBrake();
+  broadcastCockpitTelemetry(null, true);
+  showToast(on ? '耐雪ブレーキ：ON（制輪子予熱圧保持）' : '耐雪ブレーキ：OFF', 2400);
+}
 
 function handleToggleView() {
   if (isTheWorldActive) setTheWorld(false, { silentToast: true });
@@ -760,6 +891,7 @@ btnToggleView.addEventListener('click', handleToggleView);
 function handleToggleMute() {
   sound.init();
   sound.setMuted(!sound.isMuted);
+  if (sound.isMuted) announcements.cancelAll();
   btnToggleMute.textContent = sound.isMuted ? '音: OFF' : '音: ON';
 }
 btnToggleMute.addEventListener('click', handleToggleMute);
@@ -780,14 +912,19 @@ btnHorn.addEventListener('click', () => {
 function handleDepartureMelody() {
   sound.init();
   if (isTheWorldActive) return;
+  const platSt = physics.getCurrentStationAtPlatform();
   if (sound.isMelodyPlaying) {
     sound.stopDepartureMelody();
-    showToast('発車メロディを停止しました', 1800);
+    if (platSt && performance.now() - lastAtosCloseMs > 4500) {
+      lastAtosCloseMs = performance.now();
+      announcements.onDoorsClosing(platSt);
+    } else {
+      showToast('発車メロディを停止しました', 1800);
+    }
     return;
   }
-  let targetSt = physics.getCurrentStationAtPlatform();
+  let targetSt = platSt;
   if (!targetSt) {
-    // 駅停車外でも最寄り駅の発車メロディを再生可能
     let bestDist = Infinity;
     for (const st of STATIONS) {
       const distDiff = Math.abs(physics.distance - st.stopDistance);
@@ -801,7 +938,7 @@ function handleDepartureMelody() {
   const stName = targetSt ? targetSt.nameKanji : '日暮里';
   const melodyTitle = sound.getMelodyTitle(stId);
   sound.playDepartureMelody(stId);
-  showToast(`♪ ${stName}駅『${melodyTitle}』再生中（もう一度 F で停止 / D で戸閉）`, 3800);
+  showToast(`♪ ${stName}駅『${melodyTitle}』再生中（もう一度 F で戸閉放送 / D で戸閉）`, 3800);
 }
 if (btnMelody) {
   btnMelody.addEventListener('click', handleDepartureMelody);
@@ -814,8 +951,13 @@ function handleDoorToggle() {
     showToast('走行中は扉を開閉できません（停車後に操作してください）', 2500);
     return;
   }
+  const platSt = physics.getCurrentStationAtPlatform();
   if (!res.doorsOpen) {
     sound.stopDepartureMelody();
+    if (platSt && performance.now() - lastAtosCloseMs > 4500) {
+      lastAtosCloseMs = performance.now();
+      announcements.onDoorsClosing(platSt);
+    }
   }
   sound.playDoorChime(res.doorsOpen);
   syncDoorButton();
@@ -870,10 +1012,15 @@ window.addEventListener('keydown', (e) => {
     return;
   }
 
-  // 別窓計器パネル (P)・時間帯切替・HUD非表示は時間停止中でも共通利用可能
+  // 別窓計器パネル (P)・天候(R)・時間帯切替・HUD非表示は時間停止中でも共通利用可能
   if (e.code === 'KeyP' && !e.repeat) {
     e.preventDefault();
     openInstrumentPanel();
+    return;
+  }
+  if (e.code === 'KeyR' && !e.repeat) {
+    e.preventDefault();
+    handleToggleWeather();
     return;
   }
   if (e.code === 'Tab') {
@@ -984,6 +1131,27 @@ window.addEventListener('keydown', (e) => {
       handleToggleMute();
       break;
     }
+    case 'KeyY': {
+      if (!e.repeat) {
+        e.preventDefault();
+        handleToggleWiper();
+      }
+      break;
+    }
+    case 'KeyL': {
+      if (!e.repeat) {
+        e.preventDefault();
+        handleToggleBeam();
+      }
+      break;
+    }
+    case 'KeyB': {
+      if (!e.repeat) {
+        e.preventDefault();
+        handleToggleSnowBrake();
+      }
+      break;
+    }
     default:
       break;
   }
@@ -1092,22 +1260,22 @@ function updateSpectatorCamera(dt) {
   }
 }
 
-function stepFrame() {
-  const rawDt = Math.min(clock.getDelta(), 0.1);
-  const elapsed = clock.elapsedTime;
+function stepFrame({ skipRender = false, fixedDt = null } = {}) {
+  const rawDt = fixedDt !== null ? fixedDt : Math.min(clock.getDelta(), 0.1);
+  const elapsed = clock.elapsedTime + (fixedDt !== null ? fixedDt : 0);
 
   // ザ・ワールド発動中：全物理・対向車・並走車・音声を完全停止し、自由スペクテイターカメラのみ駆動！
   if (isTheWorldActive) {
     updateSpectatorCamera(rawDt);
     broadcastCockpitTelemetry(null);
     atmosphere.update(camera.position, frozenElapsed);
-    atmosphere.render();
+    if (!skipRender) atmosphere.render();
     return;
   }
 
   const dt = rawDt;
 
-  // 1. 車両縦物理・ブレーキ圧・ジョイント通過判定の更新
+  // 1. 車両縦物理・ブレーキ圧・ATS-Pパターン・分岐器揺れ・停止カックン判定の更新
   const physState = physics.update(dt, {
     onRailJoint: (jointEvt) => {
       cabView.triggerJointImpulse(jointEvt);
@@ -1116,7 +1284,24 @@ function stepFrame() {
     onBrakeAirRelease: (strength) => {
       sound.playBrakeAirRelease(strength);
     },
+    onTurnoutJolt: (strength) => {
+      cabView.triggerTurnoutJolt(strength);
+    },
+    onStopJerk: (bcAtStop) => {
+      cabView.triggerStopJerk(bcAtStop);
+    },
+    onAtsEvent: (evt) => {
+      if (evt.type === 'brake_apply') {
+        sound.setAtsChimeActive(true);
+      } else if (evt.type === 'brake_release') {
+        sound.setAtsChimeActive(false);
+      } else if (evt.type === 'pattern_approach') {
+        sound.playAtsChimePair();
+      }
+      announcements.onAtsEvent(evt);
+    },
   });
+  sound.setAtsChimeActive(Boolean(physState.atsBrakeActive));
 
   if (physState.speedKmh > 3.5) {
     wasMovingSinceStop = true;
@@ -1126,6 +1311,7 @@ function stepFrame() {
     if (atStation) {
       const diff = physState.distance - atStation.stopDistance;
       const signStr = diff >= 0 ? `+${diff.toFixed(2)}` : diff.toFixed(2);
+      announcements.onStationStop(atStation, diff);
       if (atStation.id === 'kitasenju') {
         showToast(
           `終着 北千住駅 到着 ｜ [15] 停止目標との差 ${signStr} m — ご乗務お疲れさまでした`,
@@ -1140,19 +1326,26 @@ function stepFrame() {
     }
   }
 
-  // 2. 次停車駅・制限速度・閉塞信号機の更新
+  // 2. 次停車駅・制限速度・閉塞信号機・自動放送＆指差喚呼の更新
   const nextStop = physics.getNextScheduledStop();
   const remainingMeters = nextStop ? nextStop.stopDistance - physState.distance : 0;
   const speedLimitObj = route.getSpeedLimitAt(physState.distance);
 
   trackSystem.updateSignals(physState.distance, nextStop ? nextStop.stopDistance : null);
+  announcements.update({
+    distance: physState.distance,
+    speedKmh: physState.speedKmh,
+    serviceType: physics.serviceType,
+    doorsOpen: physics.doorsOpen,
+    isDrivingStarted,
+  });
 
-  // 3. 沿線風景（隅田川さざ波・航空障害灯・上り対向列車）更新
+  // 3. 沿線風景（隅田川さざ波・航空障害灯・幹線道路交通・上り対向列車）更新
   scenery.update(dt, elapsed, physState.distance, () => {
     sound.playPassingTrainWhoosh();
   });
 
-  // 4. 3D運転台・サスペンションカメラ・3D計器盤更新
+  // 4. 3D運転台・6自由度サスペンション・駅照明連動・ワイパー・3D計器盤更新
   cabView.update(dt, elapsed, {
     ...physState,
     notch: physics.currentNotch,
@@ -1162,6 +1355,9 @@ function stepFrame() {
     speedLimit: speedLimitObj.limit,
     nextStopName: nextStop ? nextStop.nameKanji : '北千住',
     remainingMeters,
+    onWiperReversal: (dir) => {
+      sound.playWiperBlade(dir);
+    },
   });
 
   // 5. Web Audio 連続走行音更新
@@ -1190,7 +1386,6 @@ function stepFrame() {
         hudNextDist.textContent = `${(remainingMeters / 1000).toFixed(2)} km`;
       }
 
-      // 停止目標 ±50m 以内で精密停止バーをスライド表示
       if (Math.abs(remainingMeters) <= 50) {
         stopBarWrap.style.opacity = '1';
         const pct = THREE.MathUtils.clamp(50 - remainingMeters, 0, 100);
@@ -1205,7 +1400,9 @@ function stepFrame() {
 
   // 7. 太陽シャドウ追従 & ポストプロセス描画
   atmosphere.update(cabView.trainRoot.position, elapsed);
-  atmosphere.render();
+  if (!skipRender) {
+    atmosphere.render();
+  }
 }
 
 function animate() {
@@ -1224,13 +1421,35 @@ window.__sim = {
     physics.distance = d;
     physics.speedMps = speedKmh / 3.6;
     physics.speedKmh = speedKmh;
+    announcements.reset(d);
     cabView._panelTimer = 1.0; // 計器盤を即時更新
-    stepFrame();
+    stepFrame({ skipRender: isRenderPaused, fixedDt: 0.016 });
     broadcastCockpitTelemetry(null, true);
+  },
+  stepDt(fixedDt = 0.05, steps = 1) {
+    for (let i = 0; i < steps; i++) {
+      stepFrame({ skipRender: true, fixedDt });
+    }
   },
   setPreset(id) {
     atmosphere.applyPreset(id);
-    stepFrame();
+    if (!isRenderPaused) stepFrame();
+  },
+  setWeather(mode) {
+    applyWeatherMode(mode, { silentToast: true });
+    cabView._panelTimer = 1.0;
+    if (!isRenderPaused) stepFrame();
+  },
+  toggleWiper() {
+    const res = cabView.toggleWiper();
+    syncWeatherAndLightButtons();
+    if (!isRenderPaused) stepFrame();
+    return res;
+  },
+  setHeadlightMode(mode) {
+    cabView.setHeadlightMode(mode);
+    syncWeatherAndLightButtons();
+    if (!isRenderPaused) stepFrame();
   },
   getState() {
     return {
@@ -1239,29 +1458,41 @@ window.__sim = {
       notch: physics.currentNotch.id,
       notchIndex: physics.notchIndex,
       bcPressure: physics.bcPressure,
+      atsPatternSpeedKmh: physics.atsPatternSpeedKmh,
+      atsPatternApproach: physics.atsPatternApproach,
+      atsBrakeActive: physics.atsBrakeActive,
+      snowBrake: physics.snowBrake,
+      weatherMode: atmosphere.weatherMode,
+      wiperActive: cabView.wiperActive,
+      headlightMode: cabView.headlightMode,
+      stationLightLevel: cabView.stationLightLevel,
+      roadVehicleCount: scenery.roadVehicles.length,
+      renderCalls: renderer.info.render.calls,
+      renderTriangles: renderer.info.render.triangles,
       panelConnected: isPanelConnected,
     };
   },
   capture() {
-    stepFrame();
+    cabView._panelTimer = 1.0;
+    stepFrame({ skipRender: false, fixedDt: 0.016 });
     return canvas.toDataURL('image/png');
   },
   placeOncoming(idx, headD) {
     if (scenery.oncomingTrains[idx]) {
       scenery.oncomingTrains[idx].headD = headD;
     }
-    stepFrame();
+    if (!isRenderPaused) stepFrame();
   },
   placeParallel(idx, d) {
     if (scenery.parallelTrains[idx]) {
       scenery.parallelTrains[idx].d = d;
     }
-    stepFrame();
+    if (!isRenderPaused) stepFrame();
   },
   setLook(yaw, pitch) {
     cabView.lookYawOffset = yaw;
     cabView.lookPitchOffset = pitch;
-    stepFrame();
+    if (!isRenderPaused) stepFrame();
   },
   setNotch(idx) {
     physics.notchIndex = idx;
@@ -1269,36 +1500,44 @@ window.__sim = {
     cabView.masconVisualAngle =
       relNotch >= 0 ? -0.04 + (relNotch / 5) * 0.44 : -0.04 + (relNotch / 9) * 0.56;
     cabView._panelTimer = 1.0;
-    stepFrame();
+    if (!isRenderPaused) stepFrame();
     broadcastCockpitTelemetry(null, true);
   },
   setViewMode(mode) {
     cabView.viewMode = mode;
     cabView._applyViewMode();
-    stepFrame();
+    if (!isRenderPaused) stepFrame();
   },
   startSession() {
     startDrivingSession();
-    stepFrame();
+    if (!isRenderPaused) stepFrame();
   },
   setTheWorld(active) {
     setTheWorld(active, { silentToast: true });
-    stepFrame();
+    if (!isRenderPaused) stepFrame();
   },
   broadcastTelemetry() {
     broadcastCockpitTelemetry(null, true);
   },
   testAllSounds() {
     sound.init();
+    sound.setRainIntensity(1.0);
     sound.update({ speedKmh: 12, motorEffort: 0.85, zoneType: 'viaduct_ballast', curvature: 0.0025 });
     sound.update({ speedKmh: 36, motorEffort: 0.9, zoneType: 'truss_bridge', curvature: 0 });
     sound.update({ speedKmh: 52, motorEffort: -0.65, zoneType: 'viaduct_ballast', curvature: 0 });
+    sound.setRainIntensity(0.0);
     sound.playNotchClick('normal');
     sound.playNotchClick('neutral');
     sound.playNotchClick('eb');
     sound.playHorn();
     sound.playDoorChime(true);
     sound.playDoorChime(false);
+    sound.playConductorBuzzer();
+    sound.playOnboardChime();
+    sound.playWiperBlade(1);
+    sound.playAtsChimePair();
+    sound.setAtsChimeActive(true);
+    sound.setAtsChimeActive(false);
     sound.playDepartureMelody('nippori');
     sound.playDepartureMelody('mikawashima');
     sound.playDepartureMelody('minamisenju');
@@ -1332,7 +1571,7 @@ window.__sim = {
     specPitch = Math.asin(THREE.MathUtils.clamp(dir.y, -0.99, 0.99));
     camera.rotation.order = 'YXZ';
     camera.rotation.set(specPitch, specYaw, 0);
-    stepFrame();
+    if (!isRenderPaused) stepFrame();
   },
   getOncomingYaws(idx) {
     const tr = scenery.oncomingTrains[idx];

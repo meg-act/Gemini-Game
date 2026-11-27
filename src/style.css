@@ -291,6 +291,12 @@ body {
   color: #a9ffdb;
 }
 
+.hud-tool-btn.rain-active {
+  background: rgba(42, 132, 214, 0.26);
+  border-color: rgba(98, 178, 250, 0.72);
+  color: #cbe6ff;
+}
+
 /* 駅停車・案内トースト */
 .status-toast {
   align-self: center;
@@ -304,6 +310,78 @@ body {
   color: var(--text-primary);
   letter-spacing: 0.02em;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+
+/* 車内自動放送・駅ATOS放送・運転士指差喚呼 字幕ティッカー */
+.comms-caption {
+  align-self: center;
+  margin-top: auto;
+  margin-bottom: 10px;
+  max-width: min(760px, 92vw);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  background: rgba(11, 15, 21, 0.82);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 9px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.42);
+}
+
+.comms-badge {
+  flex: 0 0 auto;
+  padding: 3px 9px;
+  border-radius: 5px;
+  font-family: var(--font-sans);
+  font-size: 0.71rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.comms-badge.kind-call {
+  background: rgba(0, 168, 89, 0.28);
+  border: 1px solid rgba(46, 214, 132, 0.65);
+  color: #9effcc;
+}
+
+.comms-badge.kind-pa {
+  background: rgba(0, 114, 188, 0.30);
+  border: 1px solid rgba(82, 178, 248, 0.68);
+  color: #c2e6ff;
+}
+
+.comms-badge.kind-atos {
+  background: rgba(235, 162, 38, 0.28);
+  border: 1px solid rgba(255, 198, 88, 0.68);
+  color: #ffe39e;
+}
+
+.comms-badge.kind-ats {
+  background: rgba(217, 56, 41, 0.34);
+  border: 1px solid rgba(255, 114, 98, 0.78);
+  color: #ffc8c2;
+}
+
+.comms-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.comms-jp {
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: #f4f7fb;
+  line-height: 1.38;
+}
+
+.comms-en {
+  font-size: 0.74rem;
+  color: #9fb0c4;
+  line-height: 1.32;
 }
 
 /* 下部 HUD */

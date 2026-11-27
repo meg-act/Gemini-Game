@@ -143,6 +143,18 @@ window.addEventListener('keydown', (e) => {
   } else if (e.code === 'KeyT' && !e.repeat) {
     e.preventDefault();
     sendCmd('toggleWorld');
+  } else if (e.code === 'KeyR' && !e.repeat) {
+    e.preventDefault();
+    sendCmd('toggleWeather');
+  } else if (e.code === 'KeyY' && !e.repeat) {
+    e.preventDefault();
+    sendCmd('toggleWiper');
+  } else if (e.code === 'KeyL' && !e.repeat) {
+    e.preventDefault();
+    sendCmd('toggleBeam');
+  } else if (e.code === 'KeyB' && !e.repeat) {
+    e.preventDefault();
+    sendCmd('toggleSnowBrake');
   }
 });
 

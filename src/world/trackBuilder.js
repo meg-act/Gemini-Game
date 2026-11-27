@@ -12,14 +12,167 @@ import {
   SPEED_LIMITS,
   STATIONS,
 } from './routeData.js';
-import { createSpeedSignTexture } from './textures.js';
+import {
+  createSpeedSignTexture,
+  createKilometerPostTexture,
+  createGradientPostTexture,
+} from './textures.js';
 
 const WORLD_UP = new THREE.Vector3(0, 1, 0);
+
+function mergeTrackGeos(geos) {
+  let totalV = 0;
+  let totalI = 0;
+  for (const g of geos) {
+    totalV += g.attributes.position.count;
+    totalI += g.index ? g.index.count : g.attributes.position.count;
+  }
+  const pos = new Float32Array(totalV * 3);
+  const norm = new Float32Array(totalV * 3);
+  const uv = new Float32Array(totalV * 2);
+  const idx = new Uint32Array(totalI);
+  let vOff = 0;
+  let iOff = 0;
+  for (const g of geos) {
+    const p = g.attributes.position;
+    const n = g.attributes.normal;
+    const u = g.attributes.uv;
+    pos.set(p.array, vOff * 3);
+    if (n) norm.set(n.array, vOff * 3);
+    if (u) uv.set(u.array, vOff * 2);
+    if (g.index) {
+      const gi = g.index.array;
+      for (let k = 0; k < gi.length; k++) idx[iOff + k] = gi[k] + vOff;
+      iOff += gi.length;
+    } else {
+      for (let k = 0; k < p.count; k++) idx[iOff + k] = vOff + k;
+      iOff += p.count;
+    }
+    vOff += p.count;
+  }
+  const out = new THREE.BufferGeometry();
+  out.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  out.setAttribute('normal', new THREE.BufferAttribute(norm, 3));
+  out.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  out.setIndex(new THREE.BufferAttribute(idx, 1));
+  return out;
+}
+
+/**
+ * JR高架区間特有のH形鋼＋ラチスブレース架線柱＋基礎アンカー＋頂部き電線腕金ジオメトリ（中心基準、全高 ~8.2m）
+ */
+function createHBeamMastGeo() {
+  const parts = [];
+  // 前後フランジ (H鋼)
+  const flangeF = new THREE.BoxGeometry(0.28, 7.85, 0.048);
+  flangeF.translate(0, 0.12, 0.12);
+  parts.push(flangeF);
+  const flangeB = new THREE.BoxGeometry(0.28, 7.85, 0.048);
+  flangeB.translate(0, 0.12, -0.12);
+  parts.push(flangeB);
+  // 中央ウェブ
+  const web = new THREE.BoxGeometry(0.052, 7.85, 0.20);
+  web.translate(0, 0.12, 0);
+  parts.push(web);
+  // 足元フランジベースプレート＆アンカー台座
+  const basePlate = new THREE.BoxGeometry(0.46, 0.28, 0.46);
+  basePlate.translate(0, -3.55, 0);
+  parts.push(basePlate);
+  // 柱頭き電線支持腕金 (Feeder Cross-Arm)
+  const topArm = new THREE.BoxGeometry(0.76, 0.09, 0.09);
+  topArm.translate(0, 3.82, 0);
+  parts.push(topArm);
+  return mergeTrackGeos(parts);
+}
+
+/**
+ * 空が透けて見える立体アングル鉄骨ワーレントラス架線ビーム（正規化幅 1.0: x = -0.5..+0.5）
+ */
+function createLatticeTrussBeamGeo() {
+  const parts = [];
+  const h = 0.46;
+  const d = 0.26;
+  // 上弦材・下弦材（前後2本ずつ＝4本のアングル材で立体トラス構成！）
+  for (const sy of [-h * 0.5, h * 0.5]) {
+    for (const sz of [-d * 0.5, d * 0.5]) {
+      const chord = new THREE.BoxGeometry(1.0, 0.052, 0.048);
+      chord.translate(0, sy, sz);
+      parts.push(chord);
+    }
+  }
+  // 10パネルの鉛直束材＋斜材ラチス＋上面横つなぎ材
+  const bays = 10;
+  const bayW = 1.0 / bays;
+  const diagLen = Math.hypot(bayW, h);
+  const diagAng = Math.atan2(h, bayW);
+  for (let i = 0; i <= bays; i++) {
+    const x = -0.5 + i * bayW;
+    for (const sz of [-d * 0.5, d * 0.5]) {
+      const post = new THREE.BoxGeometry(0.016, h, 0.036);
+      post.translate(x, 0, sz);
+      parts.push(post);
+    }
+    const tieTop = new THREE.BoxGeometry(0.016, 0.032, d);
+    tieTop.translate(x, h * 0.5, 0);
+    parts.push(tieTop);
+    const tieBot = new THREE.BoxGeometry(0.016, 0.032, d);
+    tieBot.translate(x, -h * 0.5, 0);
+    parts.push(tieBot);
+
+    if (i < bays) {
+      const mx = x + bayW * 0.5;
+      const sign = i % 2 === 0 ? 1 : -1;
+      for (const sz of [-d * 0.5, d * 0.5]) {
+        const diag = new THREE.BoxGeometry(diagLen, 0.034, 0.030);
+        diag.rotateZ(sign * diagAng);
+        diag.translate(mx, 0, sz);
+        parts.push(diag);
+      }
+    }
+  }
+  return mergeTrackGeos(parts);
+}
+
+/**
+ * 白色懸垂がいし連＋斜め腕金＋曲引き金具（可動ブラケット）一体ジオメトリ
+ */
+function createRegistrationBracketGeo() {
+  const parts = [];
+  // 懸垂がいし本体＋4枚の磁器ひだ（シェード）
+  const core = new THREE.CylinderGeometry(0.048, 0.048, 0.44, 8);
+  core.translate(0, 0.04, 0);
+  parts.push(core);
+  for (const sy of [-0.10, -0.01, 0.08, 0.17]) {
+    const shed = new THREE.CylinderGeometry(0.105, 0.115, 0.028, 10);
+    shed.translate(0, sy, 0);
+    parts.push(shed);
+  }
+  // 下方に伸びる可動ブラケット支柱＆斜め曲引きアーム（トロリー線高さ y=-1.10 付近まで支持！）
+  const dropPipe = new THREE.BoxGeometry(0.038, 0.96, 0.038);
+  dropPipe.translate(0.32, -0.46, 0);
+  parts.push(dropPipe);
+
+  const upperArm = new THREE.BoxGeometry(0.42, 0.036, 0.036);
+  upperArm.translate(0.15, -0.14, 0);
+  parts.push(upperArm);
+
+  const pullOffArm = new THREE.BoxGeometry(0.46, 0.032, 0.032);
+  pullOffArm.rotateZ(0.46);
+  pullOffArm.translate(0.16, -0.78, 0);
+  parts.push(pullOffArm);
+
+  const steadyArm = new THREE.BoxGeometry(0.38, 0.024, 0.024);
+  steadyArm.rotateZ(-0.18);
+  steadyArm.translate(0.15, -0.96, 0);
+  parts.push(steadyArm);
+
+  return mergeTrackGeos(parts);
+}
 
 /**
  * 複線本線＋北千住2番線（中線待避線）＋日暮里14線メガコリドー
  * （常磐2線＋東北本線・高崎・尾久4線＋東北新幹線2線[地下抗口〜急勾配高架]＋京浜東北・山手方向別複々線4線＋京成2線）、
- * 2層PBR金属レール、PC枕木、スラブ軌道、門型架線柱・カテナリー架線、閉塞信号機を構築するクラス
+ * 2層PBR金属レール、PC枕木、スラブ軌道、3Dラチス架線柱・曲引き金具・き電線、ATS-P地上子・ケーブルトラフ・中継信号機を構築するクラス
  */
 export class TrackSystem {
   constructor(scene, route, textures) {
@@ -30,12 +183,30 @@ export class TrackSystem {
     this.scene.add(this.group);
 
     this.signals = [];
+    this.repeaterSignals = [];
+    this.ballastMaterial = null;
+    this.viaductMaterial = null;
 
     this._buildViaductAndBallast();
     this._buildRails();
     this._buildSleepers();
     this._buildCatenarySystem();
     this._buildSignalsAndSigns();
+    this._buildTracksideInfrastructure();
+  }
+
+  setWetness(wetAmount) {
+    const w = THREE.MathUtils.clamp(wetAmount, 0, 1);
+    if (this.ballastMaterial) {
+      this.ballastMaterial.roughness = THREE.MathUtils.lerp(0.93, 0.42, w);
+      this.ballastMaterial.metalness = THREE.MathUtils.lerp(0.04, 0.22, w);
+      this.ballastMaterial.envMapIntensity = THREE.MathUtils.lerp(0.55, 1.45, w);
+      this.ballastMaterial.color.setHex(w > 0.3 ? 0xb5bec8 : 0xffffff);
+    }
+    if (this.viaductMaterial) {
+      this.viaductMaterial.roughness = THREE.MathUtils.lerp(0.88, 0.36, w);
+      this.viaductMaterial.envMapIntensity = THREE.MathUtils.lerp(0.50, 1.35, w);
+    }
   }
 
   getNipporiParallelTrackPoint(d, lateralOffset) {
@@ -242,6 +413,7 @@ export class TrackSystem {
       metalness: 0.04,
       envMapIntensity: 0.55,
     });
+    this.ballastMaterial = ballastMat;
     const ballastMesh = new THREE.Mesh(ballastGeo, ballastMat);
     ballastMesh.receiveShadow = true;
     this.group.add(ballastMesh);
@@ -379,6 +551,7 @@ export class TrackSystem {
       metalness: 0.05,
       envMapIntensity: 0.5,
     });
+    this.viaductMaterial = viaMat;
     const viaMesh = new THREE.Mesh(viaGeo, viaMat);
     viaMesh.receiveShadow = true;
     this.group.add(viaMesh);
@@ -746,7 +919,7 @@ export class TrackSystem {
   }
 
   /**
-   * 門型ラーメン架線柱（日暮里14線ワイドトラスビーム＋東北新幹線専用高架架線柱＋北千住2面3線対応）＋ カテナリー架線
+   * 3Dラチストラスビーム＋H形鋼架線柱＋可動曲引きブラケットがいし＋高圧き電線＋カテナリー架線
    */
   _buildCatenarySystem() {
     const mastSpacing = 44.0;
@@ -768,29 +941,33 @@ export class TrackSystem {
     for (let d = 40; d <= 440; d += 40) shinkansenMasts.push(d);
 
     const steelMat = new THREE.MeshStandardMaterial({
-      color: 0x6b7278,
-      metalness: 0.72,
-      roughness: 0.44,
-      envMapIntensity: 1.1,
+      color: 0x6f777e,
+      metalness: 0.74,
+      roughness: 0.42,
+      envMapIntensity: 1.15,
     });
     const insulatorMat = new THREE.MeshStandardMaterial({
-      color: 0xe6eaee,
-      metalness: 0.15,
-      roughness: 0.22,
+      color: 0xe6ebef,
+      metalness: 0.22,
+      roughness: 0.24,
+      envMapIntensity: 1.1,
     });
 
-    const poleGeo = new THREE.BoxGeometry(0.28, 7.6, 0.28);
-    const beamGeo = new THREE.BoxGeometry(1.0, 0.30, 0.26);
-    const insGeo = new THREE.CylinderGeometry(0.08, 0.08, 0.42, 8);
+    const poleGeo = createHBeamMastGeo();
+    const beamGeo = createLatticeTrussBeamGeo();
+    const regBracketGeo = createRegistrationBracketGeo();
+    const feederInsGeo = new THREE.CylinderGeometry(0.075, 0.085, 0.36, 8);
 
     const maxPoles = validMasts.length * 2 + nipCorridorMasts.length * 4 + shinkansenMasts.length * 2 + 16;
     const maxBeams = validMasts.length + nipCorridorMasts.length * 2 + shinkansenMasts.length + 16;
-    const maxIns =
-      validMasts.length * 5 + nipCorridorMasts.length * 8 + shinkansenMasts.length * 2 + 32;
+    const maxBrackets =
+      validMasts.length * 3 + nipCorridorMasts.length * 8 + shinkansenMasts.length * 2 + 32;
+    const maxFeederIns = validMasts.length * 2 + 16;
 
     const poleInst = new THREE.InstancedMesh(poleGeo, steelMat, maxPoles);
     const beamInst = new THREE.InstancedMesh(beamGeo, steelMat, maxBeams);
-    const insInst = new THREE.InstancedMesh(insGeo, insulatorMat, maxIns);
+    const regInst = new THREE.InstancedMesh(regBracketGeo, insulatorMat, maxBrackets);
+    const feederInsInst = new THREE.InstancedMesh(feederInsGeo, insulatorMat, maxFeederIns);
 
     poleInst.castShadow = true;
     poleInst.receiveShadow = true;
@@ -800,10 +977,12 @@ export class TrackSystem {
     const basis = new THREE.Matrix4();
     let pIdx = 0;
     let bIdx = 0;
-    let iIdx = 0;
+    let rIdx = 0;
+    let fIdx = 0;
 
-    // 1. 常磐線本線（＋北千住中線）の架線柱
-    for (const d of validMasts) {
+    // 1. 常磐線本線（＋北千住中線）のH形鋼架線柱＆ワーレントラスビーム＆曲引きブラケット
+    for (let m = 0; m < validMasts.length; m++) {
+      const d = validMasts[m];
       const down = this.route.getFrameAt(d);
       const upOffset = this.route.getUpTrackOffset(d);
       const horizRight = new THREE.Vector3().crossVectors(down.tangent, WORLD_UP).normalize();
@@ -825,98 +1004,109 @@ export class TrackSystem {
         dummy.position
           .copy(down.position)
           .addScaledVector(horizRight, px)
-          .addScaledVector(WORLD_UP, 3.2);
+          .addScaledVector(WORLD_UP, 3.25);
         dummy.updateMatrix();
         poleInst.setMatrixAt(pIdx++, dummy.matrix);
+
+        // 柱頭き電線がいし (y = 7.05m)
+        dummy.position
+          .copy(down.position)
+          .addScaledVector(horizRight, px + (px < 0 ? -0.22 : 0.22))
+          .addScaledVector(WORLD_UP, 7.22);
+        dummy.updateMatrix();
+        feederInsInst.setMatrixAt(fIdx++, dummy.matrix);
       }
 
-      const span = rightX - leftX + 0.5;
+      const span = rightX - leftX + 0.45;
       const midX = (leftX + rightX) * 0.5;
       dummy.quaternion.copy(rotQ);
       dummy.scale.set(span, 1, 1);
       dummy.position
         .copy(down.position)
         .addScaledVector(horizRight, midX)
-        .addScaledVector(WORLD_UP, 6.45);
+        .addScaledVector(WORLD_UP, 6.46);
       dummy.updateMatrix();
       beamInst.setMatrixAt(bIdx++, dummy.matrix);
 
-      dummy.scale.set(1, 1, 1);
-      const insXs = [0, upOffset, leftX + 0.45, rightX - 0.45];
+      // 各線路直上の曲引き可動ブラケット（ジグザグ偏位に合わせて左右交互向き！）
+      const trackCenters = [0, upOffset];
       const midSiding = this.route.getKitaSenjuMiddleTrackOffset(d);
-      if (midSiding !== null) insXs.push(midSiding);
+      if (midSiding !== null) trackCenters.push(midSiding);
 
-      for (const ix of insXs) {
+      const flipSign = m % 2 === 0 ? 1 : -1;
+      for (const tx of trackCenters) {
+        dummy.quaternion.copy(rotQ);
+        dummy.scale.set(flipSign, 1, 1);
         dummy.position
           .copy(down.position)
-          .addScaledVector(horizRight, ix)
-          .addScaledVector(WORLD_UP, 6.18);
+          .addScaledVector(horizRight, tx)
+          .addScaledVector(WORLD_UP, 6.12);
         dummy.updateMatrix();
-        insInst.setMatrixAt(iIdx++, dummy.matrix);
+        regInst.setMatrixAt(rIdx++, dummy.matrix);
       }
     }
 
     // 2. 日暮里メガコリドー 在来線8線（東北本線4線ガントリー ＋ 京浜東北・山手4線ガントリー）
-    for (const d of nipCorridorMasts) {
+    for (let m = 0; m < nipCorridorMasts.length; m++) {
+      const d = nipCorridorMasts[m];
       const ref = this.route.getNipporiParallelPoint(d, 0);
       basis.makeBasis(ref.right, WORLD_UP, ref.tangent.clone().negate());
       const rotQ = new THREE.Quaternion().setFromRotationMatrix(basis);
 
-      // (a) 東北本線・高崎線・尾久回送線 4線スパン (-2.8m .. -18.8m)
       for (const px of d < 105 ? [-18.8] : [-2.8, -18.8]) {
         dummy.quaternion.copy(rotQ);
         dummy.scale.set(1, 1, 1);
         dummy.position
           .copy(ref.position)
           .addScaledVector(ref.right, px)
-          .addScaledVector(WORLD_UP, 3.2);
+          .addScaledVector(WORLD_UP, 3.25);
         dummy.updateMatrix();
         poleInst.setMatrixAt(pIdx++, dummy.matrix);
       }
       dummy.quaternion.copy(rotQ);
-      dummy.scale.set(16.6, 1, 1);
+      dummy.scale.set(16.6, 1.12, 1);
       dummy.position
         .copy(ref.position)
         .addScaledVector(ref.right, -10.8)
-        .addScaledVector(WORLD_UP, 6.45);
+        .addScaledVector(WORLD_UP, 6.46);
       dummy.updateMatrix();
       beamInst.setMatrixAt(bIdx++, dummy.matrix);
 
-      // (b) 京浜東北・山手線 9〜12番線 4線ワイドスパン (-30.0m .. -56.2m)
       for (const px of [-30.0, -56.2]) {
         dummy.quaternion.copy(rotQ);
         dummy.scale.set(1, 1, 1);
         dummy.position
           .copy(ref.position)
           .addScaledVector(ref.right, px)
-          .addScaledVector(WORLD_UP, 3.2);
+          .addScaledVector(WORLD_UP, 3.25);
         dummy.updateMatrix();
         poleInst.setMatrixAt(pIdx++, dummy.matrix);
       }
       dummy.quaternion.copy(rotQ);
-      dummy.scale.set(26.8, 1, 1);
+      dummy.scale.set(26.8, 1.18, 1);
       dummy.position
         .copy(ref.position)
         .addScaledVector(ref.right, -43.1)
-        .addScaledVector(WORLD_UP, 6.45);
+        .addScaledVector(WORLD_UP, 6.46);
       dummy.updateMatrix();
       beamInst.setMatrixAt(bIdx++, dummy.matrix);
 
-      // 8線すべての懸垂がいし
-      dummy.scale.set(1, 1, 1);
+      const flipSign = m % 2 === 0 ? 1 : -1;
       for (const ix of NIPPORI_SURFACE_TRACKS) {
+        dummy.quaternion.copy(rotQ);
+        dummy.scale.set(flipSign, 1, 1);
         dummy.position
           .copy(ref.position)
           .addScaledVector(ref.right, ix)
-          .addScaledVector(WORLD_UP, 6.18);
+          .addScaledVector(WORLD_UP, 6.12);
         dummy.updateMatrix();
-        insInst.setMatrixAt(iIdx++, dummy.matrix);
+        regInst.setMatrixAt(rIdx++, dummy.matrix);
       }
     }
 
-    // 3. 東北新幹線 専用高架門型架線柱（急勾配アプローチから高架橋へ連続追従！）
-    for (const d of shinkansenMasts) {
-      // 京成オーバークロス (d=95m付近) の直下だけは干渉防止でスキップ
+    // 3. 東北新幹線 専用高架門型架線柱
+    for (let m = 0; m < shinkansenMasts.length; m++) {
+      const d = shinkansenMasts[m];
       if (Math.abs(d - LANDMARKS.keiseiNipporiOverpass) < 18) continue;
 
       const shRef = this.route.getNipporiShinkansenPoint(d, -24.3);
@@ -940,28 +1130,33 @@ export class TrackSystem {
       dummy.updateMatrix();
       beamInst.setMatrixAt(bIdx++, dummy.matrix);
 
-      dummy.scale.set(1, 1, 1.3);
+      const flipSign = m % 2 === 0 ? 1 : -1;
       for (const shLat of NIPPORI_SHINKANSEN_TRACKS) {
+        dummy.quaternion.copy(rotQ);
+        dummy.scale.set(flipSign, 0.92, 1.1);
         dummy.position
           .copy(shRef.position)
           .addScaledVector(shRef.right, shLat - -24.3)
-          .addScaledVector(WORLD_UP, 5.85);
+          .addScaledVector(WORLD_UP, 5.88);
         dummy.updateMatrix();
-        insInst.setMatrixAt(iIdx++, dummy.matrix);
+        regInst.setMatrixAt(rIdx++, dummy.matrix);
       }
     }
 
     poleInst.count = pIdx;
     beamInst.count = bIdx;
-    insInst.count = iIdx;
+    regInst.count = rIdx;
+    feederInsInst.count = fIdx;
     poleInst.instanceMatrix.needsUpdate = true;
     beamInst.instanceMatrix.needsUpdate = true;
-    insInst.instanceMatrix.needsUpdate = true;
+    regInst.instanceMatrix.needsUpdate = true;
+    feederInsInst.instanceMatrix.needsUpdate = true;
     this.group.add(poleInst);
     this.group.add(beamInst);
-    this.group.add(insInst);
+    this.group.add(regInst);
+    this.group.add(feederInsInst);
 
-    // トロリー線＋ちょう架線（常磐本線2線 ＋ 北千住中線 ＋ 日暮里並走8線 ＋ 東北新幹線2線！）
+    // 4. トロリー線＋ちょう架線＋ドロッパ＋柱頭高圧き電線（Feeder Wires）
     const wireVerts = [];
     const subSteps = 8;
 
@@ -1003,6 +1198,35 @@ export class TrackSystem {
       }
     };
 
+    // 高圧き電線・保護線（両側の架線柱頭頂部 y=7.38m をゆるやかな懸垂曲線で結ぶ電線！）
+    for (const sideSign of [-1, 1]) {
+      for (let m = 0; m < validMasts.length - 1; m++) {
+        const d0 = validMasts[m];
+        const d1 = validMasts[m + 1];
+        if (d1 - d0 > mastSpacing * 1.6) continue; // 隅田川トラス橋区間はスキップ
+        let prevF = null;
+        for (let s = 0; s <= 6; s++) {
+          const t = s / 6;
+          const d = THREE.MathUtils.lerp(d0, d1, t);
+          const down = this.route.getFrameAt(d);
+          const upOff = this.route.getUpTrackOffset(d);
+          const hr = new THREE.Vector3().crossVectors(down.tangent, WORLD_UP).normalize();
+          let lat = sideSign < 0 ? -3.37 : upOff + 3.37;
+          for (const st of STATIONS) {
+            if (d >= st.platformStart - 6 && d <= st.platformEnd + 6 && st.platformSide === 'left' && sideSign < 0) {
+              lat = -7.82;
+            }
+          }
+          const sag = 4.0 * t * (1.0 - t) * 0.42;
+          const fPt = down.position.clone().addScaledVector(hr, lat).addScaledVector(WORLD_UP, 7.38 - sag);
+          if (prevF) {
+            wireVerts.push(prevF.x, prevF.y, prevF.z, fPt.x, fPt.y, fPt.z);
+          }
+          prevF = fPt;
+        }
+      }
+    }
+
     addCatenaryWireRun(mastDistances, (d) => {
       const f = this.route.getFrameAt(d);
       return { basePos: f.position, right: f.right };
@@ -1012,7 +1236,6 @@ export class TrackSystem {
       return { basePos: f.position, right: f.horizRight };
     });
 
-    // 北千住 2番線中線の架線
     const midMasts = [];
     for (let d = 4810; d <= 5360; d += 44) midMasts.push(d);
     addCatenaryWireRun(midMasts, (d) => {
@@ -1022,7 +1245,6 @@ export class TrackSystem {
       return { basePos: down.position.clone().addScaledVector(r, off), right: r };
     });
 
-    // 日暮里並走8線（東北本線4線＋京浜東北・山手4線）の架線
     for (const latOff of NIPPORI_SURFACE_TRACKS) {
       addCatenaryWireRun(nipCorridorMasts, (d) => {
         const pt = this.route.getNipporiParallelPoint(d, latOff);
@@ -1030,7 +1252,6 @@ export class TrackSystem {
       });
     }
 
-    // 東北新幹線2線の25kV交流き電ちょう架・トロリー架線
     const shWireMasts = [28, ...shinkansenMasts];
     for (const shLat of NIPPORI_SHINKANSEN_TRACKS) {
       addCatenaryWireRun(
@@ -1047,42 +1268,48 @@ export class TrackSystem {
     const wireGeo = new THREE.BufferGeometry();
     wireGeo.setAttribute('position', new THREE.Float32BufferAttribute(wireVerts, 3));
     const wireMat = new THREE.LineBasicMaterial({
-      color: 0x262a30,
+      color: 0x22262c,
       transparent: true,
-      opacity: 0.78,
+      opacity: 0.82,
     });
     this.group.add(new THREE.LineSegments(wireGeo, wireMat));
   }
 
+  /**
+   * 3現示閉塞・場内・出発信号機（フード庇・点検台・進路表示器付き）＋ 曲線見通し補助「中継信号機」＋ 制限標識
+   */
   _buildSignalsAndSigns() {
     const postMat = new THREE.MeshStandardMaterial({
-      color: 0x5c6268,
-      metalness: 0.6,
-      roughness: 0.5,
+      color: 0x626970,
+      metalness: 0.62,
+      roughness: 0.46,
     });
     const hoodMat = new THREE.MeshStandardMaterial({
-      color: 0x1a1c1e,
-      metalness: 0.3,
-      roughness: 0.75,
+      color: 0x17191c,
+      metalness: 0.28,
+      roughness: 0.72,
     });
 
-    // 閉塞・場内・出発信号機（北千住進入手前 4800m には1番線用＋2番線中線用の2基併設場内信号機！）
     const signalLocations = [
       38, 480, 920, 1255, 1820, 2450, 3120, 3465, 3910, 4420, 4815, 5242,
     ];
 
-    const poleGeo = new THREE.CylinderGeometry(0.07, 0.08, 4.4, 8);
-    const headGeo = new THREE.BoxGeometry(0.46, 1.25, 0.32);
+    const poleGeo = new THREE.CylinderGeometry(0.072, 0.085, 4.45, 8);
+    const headGeo = new THREE.BoxGeometry(0.50, 1.32, 0.26);
+    const visorGeo = new THREE.CylinderGeometry(0.115, 0.115, 0.22, 10, 1, true, 0, Math.PI);
+    visorGeo.rotateZ(Math.PI * 0.5);
+    visorGeo.rotateY(Math.PI * 0.5);
     const lampGeo = new THREE.SphereGeometry(0.095, 12, 10);
+    const stepPlatGeo = new THREE.BoxGeometry(0.62, 0.06, 0.52);
 
     for (const d of signalLocations) {
       const frame = this.route.getFrameAt(d);
       const horizRight = new THREE.Vector3().crossVectors(frame.tangent, WORLD_UP).normalize();
 
-      let offsetLeft = -2.45;
+      let offsetLeft = -2.48;
       for (const st of STATIONS) {
         if (d >= st.platformStart - 5 && d <= st.platformEnd + 18 && st.platformSide === 'left') {
-          offsetLeft = -2.15;
+          offsetLeft = -2.12;
         }
       }
 
@@ -1096,8 +1323,13 @@ export class TrackSystem {
       sigGroup.quaternion.setFromRotationMatrix(basis);
 
       const pole = new THREE.Mesh(poleGeo, postMat);
-      pole.position.y = 2.1;
+      pole.position.y = 2.15;
       sigGroup.add(pole);
+
+      // 点検用作業ステップ台＆手すり枠
+      const stepPlat = new THREE.Mesh(stepPlatGeo, postMat);
+      stepPlat.position.set(0, 3.28, -0.18);
+      sigGroup.add(stepPlat);
 
       const head = new THREE.Mesh(headGeo, hoodMat);
       head.position.set(0, 4.15, 0);
@@ -1107,16 +1339,30 @@ export class TrackSystem {
       const yellowMat = new THREE.MeshBasicMaterial({ color: 0xffaa00 });
       const redMat = new THREE.MeshBasicMaterial({ color: 0xff2626 });
 
-      const yLamp = new THREE.Mesh(lampGeo, yellowMat);
-      yLamp.position.set(0, 4.5, 0.15);
-      const rLamp = new THREE.Mesh(lampGeo, redMat);
-      rLamp.position.set(0, 4.15, 0.15);
-      const gLamp = new THREE.Mesh(lampGeo, greenMat);
-      gLamp.position.set(0, 3.8, 0.15);
-      sigGroup.add(yLamp, rLamp, gLamp);
+      for (const [ly, lMat] of [
+        [4.52, yellowMat],
+        [4.15, redMat],
+        [3.78, greenMat],
+      ]) {
+        const lamp = new THREE.Mesh(lampGeo, lMat);
+        lamp.position.set(0, ly, 0.13);
+        sigGroup.add(lamp);
 
-      // 北千住場内信号機(4815m)は中線2番線進入用の第2信号機（赤現示）を腕木で併設！
+        const visor = new THREE.Mesh(visorGeo, hoodMat);
+        visor.position.set(0, ly + 0.02, 0.21);
+        sigGroup.add(visor);
+      }
+
+      // 北千住場内信号機(4815m)：1番線進路表示器「[ 1 ]」＋ 中線2番線用第2場内信号機！
       if (d === 4815) {
+        const routeBox = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.42, 0.22), hoodMat);
+        routeBox.position.set(0, 3.22, 0.04);
+        sigGroup.add(routeBox);
+        const ledWhiteMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(2.8, 2.8, 2.5) });
+        const digitBar = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.26, 0.04), ledWhiteMat);
+        digitBar.position.set(0, 3.22, 0.16);
+        sigGroup.add(digitBar);
+
         const bracket = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.12, 0.12), postMat);
         bracket.position.set(0.45, 3.35, 0);
         sigGroup.add(bracket);
@@ -1127,7 +1373,7 @@ export class TrackSystem {
           lampGeo,
           new THREE.MeshBasicMaterial({ color: new THREE.Color(3.5, 0.12, 0.1) })
         );
-        subRed.position.set(0.88, 3.95, 0.15);
+        subRed.position.set(0.88, 3.95, 0.14);
         sigGroup.add(subRed);
       }
 
@@ -1137,7 +1383,65 @@ export class TrackSystem {
         greenMat,
         yellowMat,
         redMat,
+        aspect: 'G',
         isTerminalEnd: d > 5210,
+      });
+    }
+
+    // ---- 曲線区間の見通しを補う JR東日本「中継信号機（7灯白色ドット円形背板）」 ----
+    const repeaterDefs = [
+      { d: 315, parentSignalD: 480 },   // 三河島R300大カーブ前半
+      { d: 760, parentSignalD: 920 },   // 三河島場内中継
+      { d: 3730, parentSignalD: 3910 }, // 隅田川橋梁アプローチ中継
+      { d: 4615, parentSignalD: 4815 }, // 千住関屋カーブ→北千住場内中継
+    ];
+    const discGeo = new THREE.CylinderGeometry(0.38, 0.38, 0.08, 18);
+    discGeo.rotateX(Math.PI * 0.5);
+    const repDotGeo = new THREE.SphereGeometry(0.042, 8, 8);
+
+    for (const rDef of repeaterDefs) {
+      const f = this.route.getFrameAt(rDef.d);
+      const hr = new THREE.Vector3().crossVectors(f.tangent, WORLD_UP).normalize();
+      const rg = new THREE.Group();
+      rg.position.copy(f.position).addScaledVector(hr, -2.46);
+      rg.quaternion.setFromRotationMatrix(
+        new THREE.Matrix4().makeBasis(hr, WORLD_UP, f.tangent.clone().negate())
+      );
+
+      const rPole = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.07, 3.5, 8), postMat);
+      rPole.position.y = 1.75;
+      rg.add(rPole);
+
+      const disc = new THREE.Mesh(discGeo, hoodMat);
+      disc.position.set(0, 3.55, 0);
+      rg.add(disc);
+
+      // 中央常時点灯ドット ＋ 進行(縦)・制限(斜め45°)・停止(横) の3組マテリアル
+      const centerMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(2.6, 2.55, 2.3) });
+      const gMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(2.6, 2.55, 2.3) });
+      const yMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.1, 0.1, 0.1) });
+      const rMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.1, 0.1, 0.1) });
+
+      const addDot = (dx, dy, m) => {
+        const dot = new THREE.Mesh(repDotGeo, m);
+        dot.position.set(dx, 3.55 + dy, 0.055);
+        rg.add(dot);
+      };
+      addDot(0, 0, centerMat);
+      addDot(0, 0.22, gMat);
+      addDot(0, -0.22, gMat);
+      addDot(-0.16, 0.16, yMat);
+      addDot(0.16, -0.16, yMat);
+      addDot(-0.22, 0, rMat);
+      addDot(0.22, 0, rMat);
+
+      this.group.add(rg);
+      this.repeaterSignals.push({
+        distance: rDef.d,
+        parentSignalD: rDef.parentSignalD,
+        gMat,
+        yMat,
+        rMat,
       });
     }
 
@@ -1167,7 +1471,7 @@ export class TrackSystem {
       const tex = createSpeedSignTexture(sl.limit);
       const board = new THREE.Mesh(
         signGeo,
-        new THREE.MeshStandardMaterial({ map: tex, roughness: 0.4, metalness: 0.1 })
+        new THREE.MeshStandardMaterial({ map: tex, roughness: 0.36, metalness: 0.12 })
       );
       board.position.set(0, 2.05, 0.04);
       g.add(board);
@@ -1176,7 +1480,404 @@ export class TrackSystem {
     }
   }
 
+  /**
+   * 線路脇インフラ高密度ディテール：
+   * 1. コンクリート製連続ケーブルトラフ（U字溝・蓋目地付き）
+   * 2. 軌道内 ATS-P 地上子（オレンジ/アイボリー車上子対向トランスポンダ箱）
+   * 3. 信号機器箱・中継箱（シルバーグレー筐体＋点検台）
+   * 4. 距離標（キロポスト 2.2k〜7.4k ＋ 200m毎百メートル標）＆ 勾配標（‰腕木標）
+   * 5. 日暮里・北千住 分岐器（ポイント）周りの護輪軌条・NS形電気転轍機・動作桿・開通方向表示器・床板油汚れ
+   */
+  _buildTracksideInfrastructure() {
+    const dummy = new THREE.Object3D();
+    const basis = new THREE.Matrix4();
+
+    // ---- 1. コンクリート製連続ケーブルトラフ（高架バラスト両脇を走る蓋付き配線ダクト！） ----
+    {
+      const trPos = [];
+      const trUv = [];
+      const trIdx = [];
+      const step = 4.0;
+
+      const isBlockedByPlatform = (d, side) => {
+        for (const st of STATIONS) {
+          if (d >= st.platformStart - 3 && d <= st.platformEnd + 3) {
+            if (side < 0 && st.platformSide === 'left') return true;
+            if (side > 0 && st.platformSide === 'right') return true;
+          }
+        }
+        return false;
+      };
+
+      for (const side of [-1, 1]) {
+        let segStart = null;
+        const flushSegment = (s0, s1) => {
+          if (s1 - s0 < 8) return;
+          const cnt = Math.floor((s1 - s0) / step) + 1;
+          const baseV = trPos.length / 3;
+          const px = [-0.21, -0.20, 0.20, 0.21];
+          const py = [-0.28, -0.10, -0.10, -0.28];
+          const pu = [0.0, 0.25, 0.75, 1.0];
+
+          for (let i = 0; i < cnt; i++) {
+            const d = Math.min(s1, s0 + i * step);
+            const down = this.route.getFrameAt(d);
+            const upOff = this.route.getUpTrackOffset(d);
+            const hr = new THREE.Vector3().crossVectors(down.tangent, WORLD_UP).normalize();
+            const lat = side < 0 ? -2.08 : upOff + 2.08;
+
+            for (let k = 0; k < 4; k++) {
+              trPos.push(
+                down.position.x + hr.x * (lat + px[k]),
+                down.position.y + py[k],
+                down.position.z + hr.z * (lat + px[k])
+              );
+              trUv.push(pu[k], d * 0.9);
+            }
+            if (i < cnt - 1) {
+              const r0 = baseV + i * 4;
+              const r1 = r0 + 4;
+              for (let s = 0; s < 3; s++) {
+                trIdx.push(r0 + s, r0 + s + 1, r1 + s, r0 + s + 1, r1 + s + 1, r1 + s);
+              }
+            }
+          }
+        };
+
+        for (let d = -210; d <= 5440; d += step) {
+          const onBridge = d >= LANDMARKS.sumidaBridgeStart - 4 && d <= LANDMARKS.sumidaBridgeEnd + 4;
+          const inTurnout =
+            (d >= 88 && d <= 176) || (side > 0 && d >= 4835 && d <= 4945);
+          const blocked = onBridge || inTurnout || isBlockedByPlatform(d, side);
+
+          if (!blocked && segStart === null) {
+            segStart = d;
+          } else if (blocked && segStart !== null) {
+            flushSegment(segStart, d - step);
+            segStart = null;
+          }
+        }
+        if (segStart !== null) flushSegment(segStart, 5440);
+      }
+
+      const troughGeo = new THREE.BufferGeometry();
+      troughGeo.setAttribute('position', new THREE.Float32BufferAttribute(trPos, 3));
+      troughGeo.setAttribute('uv', new THREE.Float32BufferAttribute(trUv, 2));
+      troughGeo.setIndex(trIdx);
+      troughGeo.computeVertexNormals();
+
+      const troughMat = new THREE.MeshStandardMaterial({
+        color: 0xaab0b5,
+        map: this.textures.concrete.map,
+        roughness: 0.82,
+        metalness: 0.06,
+      });
+      const troughMesh = new THREE.Mesh(troughGeo, troughMat);
+      troughMesh.receiveShadow = true;
+      this.group.add(troughMesh);
+    }
+
+    // ---- 2. 軌道内 ATS-P 地上子（オレンジ＆白の車上子対向トランスポンダ箱：下り線＆上り線） ----
+    {
+      const atsPositions = [];
+      const pushPair = (baseD, isUp = false) => {
+        atsPositions.push({ d: baseD, isUp, color: 0xeb6a1e });      // 橙色 ATS-P 情報地上子
+        atsPositions.push({ d: baseD + 3.9, isUp, color: 0xeaeef2 }); // 白色 ATS-P/Ps 地上子
+      };
+
+      // 信号機手前・制限速度手前・各駅停止目標手前に実車通りの配置！
+      for (const sig of this.signals) {
+        if (sig.distance > -180) {
+          pushPair(sig.distance - 165, false);
+          pushPair(sig.distance - 24, false);
+        }
+      }
+      for (const sl of SPEED_LIMITS) {
+        if (sl.start > 0) pushPair(sl.start - 95, false);
+      }
+      for (const st of STATIONS) {
+        pushPair(st.stopDistance - 260, false);
+        pushPair(st.stopDistance - 75, false);
+        pushPair(st.stopDistance - 11, false);
+      }
+      // 上り線の地上子も要所に配置して対向線のリアリティ向上
+      for (let ud = 150; ud <= 5100; ud += 380) {
+        pushPair(ud, true);
+      }
+
+      const transGeo = mergeTrackGeos([
+        (() => {
+          const base = new THREE.BoxGeometry(0.46, 0.045, 0.66);
+          base.translate(0, -0.02, 0);
+          return base;
+        })(),
+        (() => {
+          const top = new THREE.BoxGeometry(0.34, 0.055, 0.52);
+          top.translate(0, 0.025, 0);
+          return top;
+        })(),
+      ]);
+      const transMat = new THREE.MeshStandardMaterial({
+        color: 0xffffff,
+        roughness: 0.42,
+        metalness: 0.14,
+      });
+      const transInst = new THREE.InstancedMesh(transGeo, transMat, atsPositions.length);
+      const colTmp = new THREE.Color();
+
+      atsPositions.forEach((item, idx) => {
+        const f = item.isUp
+          ? this.route.getUpTrackFrameAt(item.d)
+          : this.route.getFrameAt(item.d);
+        const right = item.isUp ? f.horizRight : f.right;
+        const up = item.isUp ? WORLD_UP : f.up;
+        const fwd = item.isUp ? f.forwardAlongRoute : f.tangent;
+
+        basis.makeBasis(right, up, fwd.clone().negate());
+        dummy.quaternion.setFromRotationMatrix(basis);
+        dummy.scale.set(1, 1, 1);
+        dummy.position.copy(f.position).addScaledVector(up, -0.085);
+        dummy.updateMatrix();
+        transInst.setMatrixAt(idx, dummy.matrix);
+        transInst.setColorAt(idx, colTmp.setHex(item.color));
+      });
+      transInst.instanceMatrix.needsUpdate = true;
+      if (transInst.instanceColor) transInst.instanceColor.needsUpdate = true;
+      this.group.add(transInst);
+    }
+
+    // ---- 3. 信号機器箱・中継箱（高架橋側壁沿いのシルバーグレー器具箱） ----
+    {
+      const relayLocations = [];
+      for (const sig of this.signals) relayLocations.push(sig.distance - 5.5);
+      for (let d = -120; d <= 5320; d += 155) {
+        if (d > LANDMARKS.sumidaBridgeStart - 12 && d < LANDMARKS.sumidaBridgeEnd + 12) continue;
+        relayLocations.push(d);
+      }
+
+      const relayGeo = mergeTrackGeos([
+        (() => {
+          const legL = new THREE.BoxGeometry(0.08, 0.45, 0.42);
+          legL.translate(-0.34, 0.225, 0);
+          return legL;
+        })(),
+        (() => {
+          const legR = new THREE.BoxGeometry(0.08, 0.45, 0.42);
+          legR.translate(0.34, 0.225, 0);
+          return legR;
+        })(),
+        (() => {
+          const box = new THREE.BoxGeometry(0.86, 1.18, 0.46);
+          box.translate(0, 1.02, 0);
+          return box;
+        })(),
+        (() => {
+          const roof = new THREE.BoxGeometry(0.94, 0.06, 0.54);
+          roof.translate(0, 1.63, 0);
+          return roof;
+        })(),
+      ]);
+      const relayMat = new THREE.MeshStandardMaterial({
+        color: 0xc2c9cf,
+        roughness: 0.48,
+        metalness: 0.42,
+      });
+      const relayInst = new THREE.InstancedMesh(relayGeo, relayMat, relayLocations.length);
+      let rCnt = 0;
+
+      for (const rd of relayLocations) {
+        let skip = false;
+        for (const st of STATIONS) {
+          if (rd >= st.platformStart - 6 && rd <= st.platformEnd + 6 && st.platformSide === 'left') {
+            skip = true;
+          }
+        }
+        if (skip) continue;
+        const f = this.route.getFrameAt(rd);
+        const hr = new THREE.Vector3().crossVectors(f.tangent, WORLD_UP).normalize();
+        basis.makeBasis(hr, WORLD_UP, f.tangent.clone().negate());
+        dummy.quaternion.setFromRotationMatrix(basis);
+        dummy.scale.set(1, 1, 1);
+        dummy.position.copy(f.position).addScaledVector(hr, -2.85).addScaledVector(WORLD_UP, -0.22);
+        dummy.updateMatrix();
+        relayInst.setMatrixAt(rCnt++, dummy.matrix);
+      }
+      relayInst.count = rCnt;
+      relayInst.instanceMatrix.needsUpdate = true;
+      this.group.add(relayInst);
+    }
+
+    // ---- 4. 距離標（上野起点 2.0k 〜 7.6k キロポスト＆200m毎の百メートル標）＋ 勾配標 ----
+    {
+      // 日暮里駅停止目標 (d=0m) が実物の上野起点 2.20km (2,200m) に相当！
+      const kmTexCache = new Map();
+      const getKmMat = (kmInt, subDigit) => {
+        const key = `${kmInt}_${subDigit ?? 'full'}`;
+        if (kmTexCache.has(key)) return kmTexCache.get(key);
+        const tex = createKilometerPostTexture(kmInt, subDigit);
+        const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.45, metalness: 0.08 });
+        kmTexCache.set(key, mat);
+        return mat;
+      };
+
+      const fullPostGeo = new THREE.BoxGeometry(0.22, 0.92, 0.14);
+      const subPostGeo = new THREE.BoxGeometry(0.18, 0.62, 0.10);
+
+      for (let uenoMeters = 2000; uenoMeters <= 7600; uenoMeters += 200) {
+        const d = uenoMeters - 2200; // d = -200m .. 5400m
+        if (d < ROUTE_START_BUFFER + 10 || d > ROUTE_END_BUFFER - 10) continue;
+        if (d > LANDMARKS.sumidaBridgeStart && d < LANDMARKS.sumidaBridgeEnd) continue;
+
+        let onLeftPlat = false;
+        for (const st of STATIONS) {
+          if (d >= st.platformStart - 3 && d <= st.platformEnd + 3 && st.platformSide === 'left') {
+            onLeftPlat = true;
+          }
+        }
+        if (onLeftPlat) continue;
+
+        const kmInt = Math.floor(uenoMeters / 1000);
+        const remHundred = Math.round((uenoMeters % 1000) / 100);
+        const isFullKm = remHundred === 0;
+
+        const f = this.route.getFrameAt(d);
+        const hr = new THREE.Vector3().crossVectors(f.tangent, WORLD_UP).normalize();
+        const postMesh = new THREE.Mesh(
+          isFullKm ? fullPostGeo : subPostGeo,
+          getKmMat(kmInt, isFullKm ? null : remHundred)
+        );
+        basis.makeBasis(hr, WORLD_UP, f.tangent.clone().negate());
+        postMesh.quaternion.setFromRotationMatrix(basis);
+        postMesh.position
+          .copy(f.position)
+          .addScaledVector(hr, -2.38)
+          .addScaledVector(WORLD_UP, isFullKm ? 0.28 : 0.14);
+        this.group.add(postMesh);
+      }
+
+      // 勾配標（実路線縱断勾配の変曲点に設置！）
+      const gradePosts = [
+        { d: 82, label: '6.5', slope: 'up' },
+        { d: 755, label: 'L', slope: 'level' },
+        { d: 1505, label: '3.0', slope: 'up' },
+        { d: 2210, label: 'L', slope: 'level' },
+        { d: 3455, label: '10.0', slope: 'up' },
+        { d: 3925, label: 'L', slope: 'level' },
+        { d: 4355, label: '11.5', slope: 'down' },
+        { d: 4925, label: 'L', slope: 'level' },
+      ];
+      const gPoleMat = new THREE.MeshStandardMaterial({ color: 0xf0f2f5, roughness: 0.5 });
+      const gPoleGeo = new THREE.BoxGeometry(0.09, 1.55, 0.09);
+      const gBladeGeo = new THREE.BoxGeometry(0.58, 0.22, 0.04);
+
+      for (const gp of gradePosts) {
+        const f = this.route.getFrameAt(gp.d);
+        const hr = new THREE.Vector3().crossVectors(f.tangent, WORLD_UP).normalize();
+        const holder = new THREE.Group();
+        holder.position.copy(f.position).addScaledVector(hr, -2.52);
+        basis.makeBasis(hr, WORLD_UP, f.tangent.clone().negate());
+        holder.quaternion.setFromRotationMatrix(basis);
+
+        const pole = new THREE.Mesh(gPoleGeo, gPoleMat);
+        pole.position.y = 0.62;
+        holder.add(pole);
+
+        const bladeMat = new THREE.MeshStandardMaterial({
+          map: createGradientPostTexture(gp.label, gp.slope),
+          roughness: 0.4,
+        });
+        const blade = new THREE.Mesh(gBladeGeo, bladeMat);
+        blade.position.set(0.24, 1.24, 0.02);
+        blade.rotation.z = gp.slope === 'up' ? 0.18 : gp.slope === 'down' ? -0.18 : 0.0;
+        holder.add(blade);
+
+        this.group.add(holder);
+      }
+    }
+
+    // ---- 5. 日暮里・北千住 分岐器（ポイント）ディテール：護輪軌条・電気転轍機・動作桿・床板油汚れ・開通表示器 ----
+    {
+      const switchMachineMat = new THREE.MeshStandardMaterial({
+        color: 0x22262b,
+        metalness: 0.65,
+        roughness: 0.42,
+      });
+      const rodMat = new THREE.MeshStandardMaterial({
+        color: 0xcfd6de,
+        metalness: 0.88,
+        roughness: 0.22,
+      });
+      const greaseMat = new THREE.MeshStandardMaterial({
+        color: 0x141210,
+        roughness: 0.24,
+        metalness: 0.35,
+      });
+      const guardRailMat = new THREE.MeshStandardMaterial({
+        color: 0x7b604e,
+        metalness: 0.72,
+        roughness: 0.44,
+      });
+      const switchTargetMat = new THREE.MeshBasicMaterial({
+        color: new THREE.Color(0.35, 1.8, 3.2), // 定位開通を示す青白い内照式ダルマ・開通標識！
+      });
+
+      const turnoutPoints = [
+        { d: 97, lat: 0.0, machineSide: -1 },   // 日暮里 4番線側 トング先端
+        { d: 165, lat: 4.1, machineSide: +1 },  // 日暮里 上り3番線側 合流端
+        { d: 4847, lat: 8.6, machineSide: +1 }, // 北千住 上り本線側 分岐端
+        { d: 4932, lat: 4.25, machineSide: -1 }, // 北千住 2番線中線側 分岐端
+      ];
+
+      for (const tp of turnoutPoints) {
+        const f = this.route.getFrameAt(tp.d);
+        const hr = new THREE.Vector3().crossVectors(f.tangent, WORLD_UP).normalize();
+        const tg = new THREE.Group();
+        tg.position.copy(f.position).addScaledVector(hr, tp.lat);
+        basis.makeBasis(hr, WORLD_UP, f.tangent.clone().negate());
+        tg.quaternion.setFromRotationMatrix(basis);
+
+        // トングレール摺動床板の黒い潤滑グリス汚れ
+        const greasePatch = new THREE.Mesh(new THREE.PlaneGeometry(1.55, 6.5), greaseMat);
+        greasePatch.rotation.x = -Math.PI * 0.5;
+        greasePatch.position.set(0, -0.125, -2.5);
+        tg.add(greasePatch);
+
+        // 護輪軌条（ガードレール 2本）
+        for (const gx of [-0.38, 0.38]) {
+          const gr = new THREE.Mesh(new THREE.BoxGeometry(0.032, 0.09, 5.2), guardRailMat);
+          gr.position.set(gx, -0.045, -3.5);
+          tg.add(gr);
+        }
+
+        // NS形電気転轍機（ポイントマシン筐体）＋ 銀色の動作桿・鎖錠桿 2本
+        const mX = tp.machineSide * 1.42;
+        const machine = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.28, 1.05), switchMachineMat);
+        machine.position.set(mX, -0.06, 0);
+        tg.add(machine);
+
+        for (const rz of [-0.22, 0.22]) {
+          const rod = new THREE.Mesh(new THREE.BoxGeometry(1.45, 0.03, 0.04), rodMat);
+          rod.position.set(mX * 0.5, -0.10, rz);
+          tg.add(rod);
+        }
+
+        // 開通方向表示器（青白色発光ターゲット）
+        const indPost = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.55, 6), switchMachineMat);
+        indPost.position.set(tp.machineSide * 1.85, 0.12, 0.4);
+        tg.add(indPost);
+
+        const indLamp = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.20, 0.16), switchTargetMat);
+        indLamp.position.set(tp.machineSide * 1.85, 0.42, 0.4);
+        tg.add(indLamp);
+
+        this.group.add(tg);
+      }
+    }
+  }
+
   updateSignals(trainDistance, nextStopDistance) {
+    const aspectByDist = new Map();
+
     for (const sig of this.signals) {
       let aspect = 'G';
       if (sig.isTerminalEnd) {
@@ -1190,6 +1891,9 @@ export class TrackSystem {
       } else if (trainDistance > sig.distance + 8) {
         aspect = 'R';
       }
+
+      sig.aspect = aspect;
+      aspectByDist.set(sig.distance, aspect);
 
       sig.greenMat.color.setRGB(
         aspect === 'G' ? 0.1 : 0.01,
@@ -1207,5 +1911,26 @@ export class TrackSystem {
         aspect === 'R' ? 0.1 : 0.01
       );
     }
+
+    // 中継信号機を主信号機の現示と完全連動（G=縦3灯, Y=斜め3灯, R=横3灯）
+    for (const rep of this.repeaterSignals) {
+      const aspect = trainDistance > rep.distance + 8 ? 'R' : aspectByDist.get(rep.parentSignalD) || 'G';
+      rep.gMat.color.setRGB(
+        aspect === 'G' ? 2.8 : 0.06,
+        aspect === 'G' ? 2.75 : 0.06,
+        aspect === 'G' ? 2.4 : 0.06
+      );
+      rep.yMat.color.setRGB(
+        aspect === 'Y' ? 2.8 : 0.06,
+        aspect === 'Y' ? 2.75 : 0.06,
+        aspect === 'Y' ? 2.4 : 0.06
+      );
+      rep.rMat.color.setRGB(
+        aspect === 'R' ? 2.8 : 0.06,
+        aspect === 'R' ? 2.75 : 0.06,
+        aspect === 'R' ? 2.4 : 0.06
+      );
+    }
   }
 }
+

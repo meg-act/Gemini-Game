@@ -138,6 +138,7 @@ export class AtmosphereAndPost {
 
     this.sunDirection = new THREE.Vector3();
     this.currentPreset = ATMOSPHERE_PRESETS.magic_hour;
+    this.weatherMode = 'clear'; // 'clear' | 'rain'
     this.onPresetCallbacks = [];
 
     // 1. 物理大気散乱 Sky ドーム
@@ -267,9 +268,18 @@ export class AtmosphereAndPost {
     this.onPresetCallbacks.push(cb);
   }
 
+  setWeather(mode) {
+    const next = mode === 'rain' ? 'rain' : 'clear';
+    if (this.weatherMode === next) return this.weatherMode;
+    this.weatherMode = next;
+    this.applyPreset(this.currentPreset.id);
+    return this.weatherMode;
+  }
+
   applyPreset(presetId) {
     const p = ATMOSPHERE_PRESETS[presetId] || ATMOSPHERE_PRESETS.magic_hour;
     this.currentPreset = p;
+    const isRain = this.weatherMode === 'rain';
 
     // 太陽方向ベクトル (北 = -Z, 東 = +X)
     const elevRad = THREE.MathUtils.degToRad(p.elevationDeg);
@@ -283,18 +293,24 @@ export class AtmosphereAndPost {
 
     const applySkyUniforms = (skyObj) => {
       const u = skyObj.material.uniforms;
-      u['turbidity'].value = p.turbidity;
-      u['rayleigh'].value = p.rayleigh;
-      u['mieCoefficient'].value = p.mieCoefficient;
-      u['mieDirectionalG'].value = p.mieDirectionalG;
+      u['turbidity'].value = isRain ? Math.max(14.0, p.turbidity * 1.65) : p.turbidity;
+      u['rayleigh'].value = isRain ? p.rayleigh * 0.38 : p.rayleigh;
+      u['mieCoefficient'].value = isRain ? 0.024 : p.mieCoefficient;
+      u['mieDirectionalG'].value = isRain ? 0.70 : p.mieDirectionalG;
       u['sunPosition'].value.copy(this.sunDirection);
     };
 
     applySkyUniforms(this.sky);
     applySkyUniforms(this.envSky);
-    const groundBounce = new THREE.Color(p.hemiGroundColor).lerp(new THREE.Color(0x7c746e), 0.36);
+    const groundBounce = new THREE.Color(p.hemiGroundColor).lerp(
+      new THREE.Color(isRain ? 0x454d58 : 0x7c746e),
+      0.36
+    );
     this.envGroundMat.color.copy(groundBounce);
-    if (p.id === 'golden_hour') {
+    if (isRain) {
+      this.envHorizonMat.color.setHex(0x8c9bad);
+      this.envHorizonMat.opacity = 0.78;
+    } else if (p.id === 'golden_hour') {
       this.envHorizonMat.color.setHex(0xeef2f6);
       this.envHorizonMat.opacity = 0.62;
     } else if (p.id === 'twilight') {
@@ -305,26 +321,34 @@ export class AtmosphereAndPost {
       this.envHorizonMat.opacity = 0.72;
     }
 
-    // リアルタイム IBL 環境マップを再ベイク（レール金属光沢やガラス反射に直結）
+    // リアルタイム IBL 環境マップを再ベイク（レール金属光沢や路面ウェット反射に直結）
     if (this.envRT) this.envRT.dispose();
     this.envRT = this.pmremGenerator.fromScene(this.envScene, 0.02);
     this.scene.environment = this.envRT.texture;
 
-    this.sunLight.color.setHex(p.sunColor);
-    this.sunLight.intensity = p.sunIntensity;
-    this.hemiLight.color.setHex(p.hemiSkyColor);
-    this.hemiLight.groundColor.setHex(p.hemiGroundColor);
-    this.hemiLight.intensity = p.hemiIntensity;
+    const sunCol = new THREE.Color(p.sunColor);
+    if (isRain) sunCol.lerp(new THREE.Color(0x8da2bc), 0.62);
+    this.sunLight.color.copy(sunCol);
+    this.sunLight.intensity = isRain ? p.sunIntensity * 0.28 : p.sunIntensity;
 
-    this.scene.fog.color.setHex(p.fogColor);
-    this.scene.fog.density = p.fogDensity;
+    const skyCol = new THREE.Color(p.hemiSkyColor);
+    if (isRain) skyCol.lerp(new THREE.Color(0x4b5c78), 0.48);
+    this.hemiLight.color.copy(skyCol);
+    this.hemiLight.groundColor.setHex(isRain ? 0x262a33 : p.hemiGroundColor);
+    this.hemiLight.intensity = isRain ? p.hemiIntensity * 0.94 : p.hemiIntensity;
 
-    this.renderer.toneMappingExposure = p.exposure;
-    this.bloomPass.strength = p.bloomStrength;
+    const fogCol = new THREE.Color(p.fogColor);
+    if (isRain) fogCol.lerp(new THREE.Color(0x2a3242), 0.58);
+    this.scene.fog.color.copy(fogCol);
+    this.scene.fog.density = isRain ? p.fogDensity * 2.15 : p.fogDensity;
+
+    this.renderer.toneMappingExposure = isRain ? p.exposure * 1.02 : p.exposure;
+    this.bloomPass.strength = isRain ? p.bloomStrength + 0.03 : p.bloomStrength;
     this.bloomPass.threshold = p.bloomThreshold;
 
+    const effectiveWindowGlow = isRain ? p.windowGlowMultiplier * 1.06 : p.windowGlowMultiplier;
     for (const cb of this.onPresetCallbacks) {
-      cb(p);
+      cb({ ...p, weatherMode: this.weatherMode, windowGlowMultiplier: effectiveWindowGlow });
     }
   }
 

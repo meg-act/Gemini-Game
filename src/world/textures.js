@@ -1289,3 +1289,295 @@ export function createVendingMachineTexture() {
   return tex;
 }
 
+/**
+ * 高架下に広がる下町街区アスファルト・路地網・歩道・コインパーキングPBRテクスチャ
+ */
+export function createUrbanStreetGridTexture(anisotropy = 8) {
+  const size = 512;
+  const rng = mulberry32(7731);
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+
+  // 街区コンクリート・敷地ベース
+  ctx.fillStyle = '#292d33';
+  ctx.fillRect(0, 0, size, size);
+
+  // 微細アスファルト粒子ノイズ
+  const img = ctx.getImageData(0, 0, size, size);
+  for (let i = 0; i < size * size; i++) {
+    const n = (rng() - 0.5) * 18;
+    img.data[i * 4] = Math.min(255, Math.max(12, 41 + n));
+    img.data[i * 4 + 1] = Math.min(255, Math.max(12, 45 + n));
+    img.data[i * 4 + 2] = Math.min(255, Math.max(12, 51 + n));
+    img.data[i * 4 + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+
+  // 敷地境界とコインパーキング枠のディテール
+  ctx.strokeStyle = 'rgba(72, 78, 88, 0.45)';
+  ctx.lineWidth = 1.5;
+  for (let gx = 64; gx < size; gx += 128) {
+    for (let gy = 64; gy < size; gy += 128) {
+      ctx.strokeRect(gx + 10, gy + 10, 96, 96);
+      if (rng() < 0.45) {
+        // コインパーキングの白枠ラインと黄色フラップ板
+        ctx.strokeStyle = 'rgba(210, 218, 228, 0.36)';
+        for (let p = 0; p < 4; p++) {
+          ctx.strokeRect(gx + 16 + p * 21, gy + 18, 18, 36);
+          ctx.fillStyle = 'rgba(225, 178, 32, 0.45)';
+          ctx.fillRect(gx + 21 + p * 21, gy + 34, 8, 3);
+        }
+        ctx.strokeStyle = 'rgba(72, 78, 88, 0.45)';
+      }
+    }
+  }
+
+  // 縦横の下町生活道路（幅44px と 幅26px の2階層路地）
+  const mainRoads = [0, 256];
+  const subRoads = [128, 384];
+
+  ctx.fillStyle = '#1d2026';
+  for (const r of mainRoads) {
+    ctx.fillRect(r, 0, 44, size);
+    ctx.fillRect(0, r, size, 44);
+  }
+  ctx.fillStyle = '#21252c';
+  for (const r of subRoads) {
+    ctx.fillRect(r, 0, 24, size);
+    ctx.fillRect(0, r, size, 24);
+  }
+
+  // 歩道縁石・路側帯白線
+  ctx.fillStyle = 'rgba(215, 222, 230, 0.48)';
+  for (const r of mainRoads) {
+    ctx.fillRect(r + 4, 0, 1.8, size);
+    ctx.fillRect(r + 38, 0, 1.8, size);
+    ctx.fillRect(0, r + 4, size, 1.8);
+    ctx.fillRect(0, r + 38, size, 1.8);
+  }
+
+  // 中央破線
+  ctx.strokeStyle = 'rgba(225, 230, 238, 0.46)';
+  ctx.lineWidth = 1.6;
+  ctx.setLineDash([12, 12]);
+  for (const r of mainRoads) {
+    ctx.beginPath();
+    ctx.moveTo(r + 22, 0);
+    ctx.lineTo(r + 22, size);
+    ctx.moveTo(0, r + 22);
+    ctx.lineTo(size, r + 22);
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
+
+  // 交差点の横断歩道ゼブラマーク
+  ctx.fillStyle = 'rgba(232, 236, 242, 0.58)';
+  for (const rx of mainRoads) {
+    for (const ry of mainRoads) {
+      ctx.fillRect(rx, ry, 44, 44);
+      ctx.fillStyle = '#1d2026';
+      ctx.fillRect(rx + 2, ry + 2, 40, 40);
+      ctx.fillStyle = 'rgba(232, 236, 242, 0.62)';
+      for (let s = 6; s < 38; s += 6) {
+        ctx.fillRect(rx + s, ry - 9, 3, 8);
+        ctx.fillRect(rx + s, ry + 45, 3, 8);
+        ctx.fillRect(rx - 9, ry + s, 8, 3);
+        ctx.fillRect(rx + 45, ry + s, 8, 3);
+      }
+    }
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.anisotropy = anisotropy;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+/**
+ * 幹線道路（尾竹橋通り・明治通り・国道4号日光街道・墨堤通り）4車線アスファルト＆歩道テクスチャ
+ * U方向 = 道路幅方向 (0..1)、V方向 = 道路延長方向（リピート）
+ */
+export function createArterialRoadTexture(anisotropy = 8) {
+  const w = 512;
+  const h = 512;
+  const rng = mulberry32(9044);
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+
+  // 濃い舗装アスファルト
+  ctx.fillStyle = '#22262d';
+  ctx.fillRect(0, 0, w, h);
+
+  const img = ctx.getImageData(0, 0, w, h);
+  for (let i = 0; i < w * h; i++) {
+    const n = (rng() - 0.5) * 16;
+    img.data[i * 4] = Math.min(255, Math.max(15, 34 + n));
+    img.data[i * 4 + 1] = Math.min(255, Math.max(15, 38 + n));
+    img.data[i * 4 + 2] = Math.min(255, Math.max(15, 45 + n));
+    img.data[i * 4 + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+
+  // 両端のインターロッキング歩道 + コンクリート縁石 (0..58, 454..512)
+  ctx.fillStyle = '#5c6169';
+  ctx.fillRect(0, 0, 56, h);
+  ctx.fillRect(w - 56, 0, 56, h);
+  ctx.fillStyle = '#8b9096';
+  ctx.fillRect(52, 0, 6, h);
+  ctx.fillRect(w - 58, 0, 6, h);
+
+  // 歩道タイル目地
+  ctx.strokeStyle = 'rgba(30, 32, 36, 0.35)';
+  ctx.lineWidth = 1;
+  for (let y = 0; y < h; y += 24) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(52, y);
+    ctx.moveTo(w - 52, y);
+    ctx.lineTo(w, y);
+    ctx.stroke();
+  }
+
+  // タイヤ轍の微かな光沢ムラ
+  for (const laneCx of [110, 198, 314, 402]) {
+    const g = ctx.createLinearGradient(laneCx - 28, 0, laneCx + 28, 0);
+    g.addColorStop(0, 'rgba(0,0,0,0)');
+    g.addColorStop(0.3, 'rgba(15,17,20,0.28)');
+    g.addColorStop(0.5, 'rgba(70,76,86,0.12)');
+    g.addColorStop(0.7, 'rgba(15,17,20,0.28)');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(laneCx - 28, 0, 56, h);
+  }
+
+  // 路側帯白実線
+  ctx.fillStyle = '#dce2ea';
+  ctx.fillRect(68, 0, 5, h);
+  ctx.fillRect(w - 73, 0, 5, h);
+
+  // センターライン（オレンジ二重線）
+  ctx.fillStyle = '#e5921c';
+  ctx.fillRect(w / 2 - 5, 0, 3.5, h);
+  ctx.fillRect(w / 2 + 1.5, 0, 3.5, h);
+
+  // 片側2車線の車線境界白破線
+  ctx.fillStyle = '#e2e7ee';
+  for (let y = 14; y < h; y += 64) {
+    if (y > 210 && y < 305) continue; // 横断歩道付近は破線スキップ
+    ctx.fillRect(156, y, 4, 32);
+    ctx.fillRect(w - 160, y, 4, 32);
+  }
+
+  // 中央付近に横断歩道＋停止線（高架下交差点のリアリティ！）
+  ctx.fillRect(70, 212, w / 2 - 78, 6); // 上り停止線
+  ctx.fillRect(w / 2 + 8, 296, w / 2 - 78, 6); // 下り停止線
+  for (let x = 80; x < w - 84; x += 22) {
+    ctx.fillRect(x, 234, 12, 46);
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = THREE.ClampToEdgeWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.anisotropy = anisotropy;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+/**
+ * JR東日本 距離標（キロポスト・半キロポスト・百メートル標）テクスチャ
+ */
+export function createKilometerPostTexture(kmNumber, subMeterDigit = null) {
+  const w = 128;
+  const h = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+
+  ctx.fillStyle = '#f2f4f6';
+  ctx.fillRect(0, 0, w, h);
+
+  // 頭頂部の黒または青/黒アクセントキャップ
+  ctx.fillStyle = subMeterDigit === null ? '#16191d' : '#0072bc';
+  ctx.fillRect(0, 0, w, 24);
+
+  ctx.strokeStyle = '#1e2228';
+  ctx.lineWidth = 6;
+  ctx.strokeRect(3, 3, w - 6, h - 6);
+
+  ctx.fillStyle = '#111418';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  if (subMeterDigit === null) {
+    // 甲号距離標（整数キロポスト: 縦に大きくキロ数＋「K」）
+    ctx.font = '900 84px "Inter", sans-serif';
+    ctx.fillText(String(kmNumber), w * 0.5, 102);
+    ctx.font = '800 44px "Inter", sans-serif';
+    ctx.fillText('K', w * 0.5, 188);
+  } else {
+    // 乙号・百メートル標（上に小さくキロ数、下に大きく 1〜9）
+    ctx.font = '800 34px "Inter", sans-serif';
+    ctx.fillText(`${kmNumber}`, w * 0.5, 66);
+    ctx.fillRect(28, 94, w - 56, 4);
+    ctx.font = '900 92px "Inter", sans-serif';
+    ctx.fillText(String(subMeterDigit), w * 0.5, 166);
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+/**
+ * JR東日本 勾配標（腕木式プレート：L=水平, 上向き/下向き‰数値）テクスチャ
+ */
+export function createGradientPostTexture(label = '10.0', slope = 'up') {
+  const w = 256;
+  const h = 96;
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+
+  ctx.fillStyle = '#f4f6f8';
+  ctx.fillRect(0, 0, w, h);
+  ctx.strokeStyle = '#181b20';
+  ctx.lineWidth = 8;
+  ctx.strokeRect(4, 4, w - 8, h - 8);
+
+  // 先端の黒塗り矢羽根アクセント
+  ctx.fillStyle = '#181b20';
+  ctx.beginPath();
+  if (slope === 'up') {
+    ctx.moveTo(w - 8, 8);
+    ctx.lineTo(w - 52, 8);
+    ctx.lineTo(w - 8, h - 8);
+  } else if (slope === 'down') {
+    ctx.moveTo(w - 8, h - 8);
+    ctx.lineTo(w - 52, h - 8);
+    ctx.lineTo(w - 8, 8);
+  } else {
+    ctx.fillRect(w - 26, 8, 18, h - 16);
+  }
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.fillStyle = '#111418';
+  ctx.font = '900 54px "Inter", sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(label, w * 0.44, h * 0.53);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+

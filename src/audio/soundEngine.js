@@ -20,6 +20,9 @@ export class TrainSoundEngine {
     this._noiseBuffer = null;
     this._melodyStoppers = [];
     this.isMelodyPlaying = false;
+    this.rainIntensity = 0;
+    this._atsChimeTimer = null;
+    this.isAtsChimeActive = false;
   }
 
   init() {
@@ -84,9 +87,16 @@ export class TrainSoundEngine {
   setTimeStopped(stopped) {
     if (this.isTimeStopped === stopped) return;
     this.isTimeStopped = stopped;
-    if (stopped) this.stopDepartureMelody();
+    if (stopped) {
+      this.stopDepartureMelody();
+      this.setAtsChimeActive(false);
+    }
     this._syncMasterGain();
     this.playTimeStopEffect(stopped);
+  }
+
+  setRainIntensity(intensity) {
+    this.rainIntensity = Math.max(0, Math.min(1, intensity || 0));
   }
 
   _setupStationPAChain() {
@@ -308,6 +318,21 @@ export class TrainSoundEngine {
     hvacFilter.connect(hvacGain);
     hvacGain.connect(this.masterGain);
     this.hvacSource.start(now);
+
+    // 6. 雨天時の運転室屋根・ガラス雨音 ＆ 濡れたレールの水しぶき転動シャー音
+    this.rainSource = this.ctx.createBufferSource();
+    this.rainSource.buffer = this._noiseBuffer;
+    this.rainSource.loop = true;
+    this.rainFilter = this.ctx.createBiquadFilter();
+    this.rainFilter.type = 'bandpass';
+    this.rainFilter.frequency.value = 1850;
+    this.rainFilter.Q.value = 0.75;
+    this.rainGain = this.ctx.createGain();
+    this.rainGain.gain.value = 0.0;
+    this.rainSource.connect(this.rainFilter);
+    this.rainFilter.connect(this.rainGain);
+    this.rainGain.connect(this.masterGain);
+    this.rainSource.start(now, 0.7);
   }
 
   /**
@@ -335,7 +360,6 @@ export class TrainSoundEngine {
     const activeElectric = absEffort > 0.03 && (isBraking ? speedKmh > 3.5 : speedKmh > 0.25);
 
     if (activeElectric) {
-      // すべり周波数を加味した誘導電動機周波数 fm (約 0..130Hz)
       const slip = isBraking ? -1.8 : 2.2;
       const fm = Math.max(4, speedKmh * 1.18 + slip);
 
@@ -347,7 +371,6 @@ export class TrainSoundEngine {
       let busVol = 0.0;
 
       if (speedKmh < 18) {
-        // 非同期域前半：日立IGBT特有の澄んだ高純度スイープ（約 880Hz → 1,090Hz）
         const t = speedKmh / 18;
         fc = 885 + t * 205;
         sideSpread = 2.0 * fm;
@@ -356,7 +379,6 @@ export class TrainSoundEngine {
         harmWeight = 0.18 * (1 - t * 0.35);
         busVol = (0.048 + 0.018 * t) * Math.min(1, absEffort * 1.25);
       } else if (speedKmh < 40) {
-        // 非同期域後半〜同期3パルス遷移：側帯波が大きく広がり「ヒュイィィーン→フォォォン」へ移行！
         const t = (speedKmh - 18) / 22;
         fc = 1090 + t * 380;
         sideSpread = (2.0 + t * 1.5) * fm;
@@ -365,7 +387,6 @@ export class TrainSoundEngine {
         harmWeight = 0.10 * (1 - t);
         busVol = 0.058 * (1 - t * 0.42) * Math.min(1, absEffort * 1.2);
       } else if (speedKmh < 58) {
-        // 同期3パルス → 1パルス域（E531の力強い中速同期トーン）
         const t = (speedKmh - 40) / 18;
         fc = fm * (9.0 - t * 3.0);
         sideSpread = fm * 2.0;
@@ -374,7 +395,6 @@ export class TrainSoundEngine {
         harmWeight = 0.06;
         busVol = 0.034 * (1 - t * 0.55) * Math.min(1, absEffort * 1.15);
       } else {
-        // 1パルス定出力高速域（主電動機と歯車音が主役）
         fc = fm * 5.0;
         sideSpread = fm * 2.0;
         carrierWeight = 0.22;
@@ -395,7 +415,6 @@ export class TrainSoundEngine {
       this.vvvfFormant.frequency.setTargetAtTime(Math.min(2600, Math.max(420, fc * 0.95)), now, 0.06);
       this.vvvfBus.gain.setTargetAtTime(busVol, now, 0.045);
 
-      // 主電動機うなり音（2×fm / 4極誘導機の基本音）
       const motorTone = Math.max(36, fm * 3.2);
       this.motorBaseOsc.frequency.setTargetAtTime(motorTone, now, 0.04);
       this.motorBaseFilter.frequency.setTargetAtTime(260 + speedKmh * 8.5, now, 0.06);
@@ -405,7 +424,6 @@ export class TrainSoundEngine {
         0.05
       );
 
-      // 平行カルダン歯車噛み合い音（実車歯数比に準じた滑らかな上昇）
       const gearFreq = Math.max(95, speedKmh * 16.8);
       this.gearHarmonicOsc.frequency.setTargetAtTime(gearFreq, now, 0.04);
       this.gearFilter.frequency.setTargetAtTime(Math.min(2400, gearFreq * 1.15), now, 0.05);
@@ -417,7 +435,6 @@ export class TrainSoundEngine {
     } else {
       this.vvvfBus.gain.setTargetAtTime(0.0, now, 0.06);
       this.motorBaseGain.gain.setTargetAtTime(0.0, now, 0.06);
-      // 惰行中も中高速域ではわずかな歯車空転うなりを残す
       const coastGear = speedKmh > 25 ? 0.009 * Math.min(1, (speedKmh - 25) / 65) : 0.0;
       if (coastGear > 0) {
         const gearFreq = speedKmh * 16.8;
@@ -436,6 +453,146 @@ export class TrainSoundEngine {
     } else {
       this.flangeGain.gain.setTargetAtTime(0.0, now, 0.1);
     }
+
+    // 5. 雨天時の雨音＆濡れレール飛沫ノイズ（速度が上がるほど高域シャー音が増す）
+    if (this.rainGain && this.rainFilter) {
+      const targetRainVol = this.rainIntensity * (0.042 + speedNorm * 0.058);
+      this.rainGain.gain.setTargetAtTime(targetRainVol, now, 0.15);
+      this.rainFilter.frequency.setTargetAtTime(1650 + speedKmh * 14, now, 0.15);
+    }
+  }
+
+  /**
+   * JR東日本 ATS-P「キンコン・キンコン」2音電磁チャイム（単発または連続鳴動）
+   */
+  playAtsChimePair() {
+    if (!this.isInitialized || !this.ctx || this.isMuted || this.isTimeStopped) return;
+    const now = this.ctx.currentTime;
+    const strikeBell = (baseFreq, t0, dur) => {
+      for (const [ratio, amp, dec] of [
+        [1.0, 0.12, dur],
+        [2.756, 0.045, dur * 0.48],
+        [4.14, 0.018, dur * 0.28],
+      ]) {
+        const osc = this.ctx.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(baseFreq * ratio, t0);
+        const g = this.ctx.createGain();
+        g.gain.setValueAtTime(0.0008, t0);
+        g.gain.linearRampToValueAtTime(amp, t0 + 0.004);
+        g.gain.exponentialRampToValueAtTime(0.0006, t0 + dec);
+        osc.connect(g);
+        g.connect(this.masterGain);
+        osc.start(t0);
+        osc.stop(t0 + dec + 0.02);
+      }
+    };
+    strikeBell(812, now, 0.22);        // 「キン」(G#5)
+    strikeBell(659.25, now + 0.19, 0.28); // 「コン」(E5)
+  }
+
+  setAtsChimeActive(active) {
+    const next = Boolean(active);
+    if (this.isAtsChimeActive === next) return;
+    this.isAtsChimeActive = next;
+    if (this._atsChimeTimer) {
+      clearInterval(this._atsChimeTimer);
+      this._atsChimeTimer = null;
+    }
+    if (next) {
+      this.playAtsChimePair();
+      this._atsChimeTimer = setInterval(() => {
+        if (!this.isAtsChimeActive) return;
+        this.playAtsChimePair();
+      }, 420);
+    }
+  }
+
+  /**
+   * 車掌→運転士 出発合図ブザー（「ツー・ツー」）
+   */
+  playConductorBuzzer() {
+    if (!this.isInitialized || !this.ctx || this.isMuted || this.isTimeStopped) return;
+    const now = this.ctx.currentTime;
+    for (const [off, dur] of [
+      [0.0, 0.18],
+      [0.30, 0.25],
+    ]) {
+      const t0 = now + off;
+      const osc = this.ctx.createOscillator();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(935, t0);
+      const bp = this.ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.value = 1150;
+      bp.Q.value = 2.2;
+      const g = this.ctx.createGain();
+      g.gain.setValueAtTime(0.001, t0);
+      g.gain.linearRampToValueAtTime(0.068, t0 + 0.012);
+      g.gain.setValueAtTime(0.062, t0 + dur - 0.015);
+      g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+      osc.connect(bp);
+      bp.connect(g);
+      g.connect(this.masterGain);
+      osc.start(t0);
+      osc.stop(t0 + dur + 0.02);
+    }
+  }
+
+  /**
+   * 車内自動放送 4音チャイム（E531/E231系 案内チャイム）
+   */
+  playOnboardChime() {
+    if (!this.isInitialized || !this.ctx || this.isMuted || this.isTimeStopped) return;
+    const now = this.ctx.currentTime;
+    const notes = [783.99, 1046.50, 1318.51, 1567.98]; // G5 - C6 - E6 - G6
+    notes.forEach((freq, i) => {
+      const t0 = now + i * 0.14;
+      const dur = i === 3 ? 0.45 : 0.24;
+      const osc = this.ctx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, t0);
+      const over = this.ctx.createOscillator();
+      over.type = 'triangle';
+      over.frequency.setValueAtTime(freq * 2, t0);
+      const og = this.ctx.createGain();
+      og.gain.value = 0.18;
+      const g = this.ctx.createGain();
+      g.gain.setValueAtTime(0.0008, t0);
+      g.gain.linearRampToValueAtTime(0.072, t0 + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0008, t0 + dur);
+      osc.connect(g);
+      over.connect(og);
+      og.connect(g);
+      g.connect(this.masterGain);
+      osc.start(t0);
+      over.start(t0);
+      osc.stop(t0 + dur + 0.03);
+      over.stop(t0 + dur + 0.03);
+    });
+  }
+
+  /**
+   * ワイパーブレード反転・摺動音（控えめなゴム水切り音「シュッ…」）
+   */
+  playWiperBlade(dir = 1) {
+    if (!this.isInitialized || !this.ctx || this.isMuted || this.isTimeStopped) return;
+    const now = this.ctx.currentTime;
+    const src = this.ctx.createBufferSource();
+    src.buffer = this._noiseBuffer;
+    const bp = this.ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.setValueAtTime(dir > 0 ? 780 : 690, now);
+    bp.frequency.linearRampToValueAtTime(dir > 0 ? 1150 : 980, now + 0.22);
+    bp.Q.value = 2.4;
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.0008, now);
+    g.gain.linearRampToValueAtTime(0.026, now + 0.04);
+    g.gain.exponentialRampToValueAtTime(0.0008, now + 0.28);
+    src.connect(bp);
+    bp.connect(g);
+    g.connect(this.masterGain);
+    src.start(now, Math.random() * 0.8, 0.32);
   }
 
   /**
@@ -1066,74 +1223,92 @@ export class TrainSoundEngine {
       scheduleChord([60, 64, 67], 32 * e, 5.2 * e, 'warm_pad', 0.96);
     } else {
       // =====================================================================
-      // 日暮里（4番線 常磐線下り）：『線路の彼方』（櫻井隆仁 / テイチク・ユニペックスROM）
-      // 高音域 (E5=76 〜 A6=93) の澄み切ったクリスタルFMベル主旋律＋DX7分散和音＋順次下降ベース
+      // 日暮里（4番線 常磐線下り）：『線路の彼方』（櫻井隆仁 / テイチク）
+      // テイチク曲最大の特徴である「1拍目裏から食い込んで始まるシンコペーション（始まりをずらした構成）」と
+      // 切ない王道進行 FM7 → G7 → Em7 → Am7 → Dm7 → G7 → Cadd9 ＋ 鈴/タンバリン系きらめき音！
       // =====================================================================
-      const e = 60 / 126 / 2; // 0.2381s
+      const e = 60 / 128 / 2; // 0.2344s
 
-      // リード旋律（先ほど1オクターブ低く伴奏に埋もれていたのを実曲通りの高音ベル域 +12 へ修正！）
+      // テイチク音源特有の微かな高域シェイカー/鈴アクセント（2・4拍目）
+      const scheduleShimmer = (offset, accent = 1.0) => {
+        const t0 = now + offset;
+        const src = this.ctx.createBufferSource();
+        src.buffer = this._noiseBuffer;
+        const hp = this.ctx.createBiquadFilter();
+        hp.type = 'highpass';
+        hp.frequency.value = 5400;
+        const g = this.ctx.createGain();
+        g.gain.setValueAtTime(0.0005, t0);
+        g.gain.linearRampToValueAtTime(0.015 * accent, t0 + 0.005);
+        g.gain.exponentialRampToValueAtTime(0.0004, t0 + 0.065);
+        src.connect(hp);
+        hp.connect(g);
+        g.connect(this.paInput);
+        src.start(t0, Math.random() * 0.5, 0.08);
+      };
+
+      // リード旋律（1拍目表を休符にし、1.0*e 裏拍から切なく滑り込むシンコペーション！）
       const lead = [
-        // イントロの軽やかなシンセベル・ピックアップ
-        [79, 0.0 * e, 1.0 * e], // G5 (ソ)
-        [84, 1.0 * e, 1.0 * e], // C6 (ド)
-        // Bar 1: C -> G/B（「ミー レ ドー シ レー」）
-        [88, 2.0 * e, 2.0 * e], // E6 (ミー)
-        [86, 4.0 * e, 1.0 * e], // D6 (レ)
-        [84, 5.0 * e, 1.0 * e], // C6 (ド)
-        [86, 6.0 * e, 2.0 * e], // D6 (レー)
-        [79, 8.0 * e, 2.0 * e], // G5 (ソー)
-        // Bar 2: Am7 -> Em7/G（「ドー シ ラ ソ ミ ソー」）
-        [84, 10.0 * e, 2.0 * e], // C6 (ドー)
-        [83, 12.0 * e, 1.0 * e], // B5 (シ)
-        [81, 13.0 * e, 1.0 * e], // A5 (ラ)
-        [79, 14.0 * e, 2.0 * e], // G5 (ソー)
-        [76, 16.0 * e, 1.0 * e], // E5 (ミ)
-        [79, 17.0 * e, 1.0 * e], // G5 (ソ)
-        // Bar 3: F -> C/E（「ラー ド ラ ソー ミ ドー」）
-        [81, 18.0 * e, 2.0 * e], // A5 (ラー)
-        [84, 20.0 * e, 1.0 * e], // C6 (ド)
-        [81, 21.0 * e, 1.0 * e], // A5 (ラ)
-        [79, 22.0 * e, 2.0 * e], // G5 (ソー)
-        [76, 24.0 * e, 1.0 * e], // E5 (ミ)
-        [79, 25.0 * e, 1.0 * e], // G5 (ソ)
-        // Bar 4: Dm7 -> G7sus4 -> G7（「ファ ソ ラ ド レー シ レー」）
-        [77, 26.0 * e, 1.0 * e], // F5 (ファ)
-        [79, 27.0 * e, 1.0 * e], // G5 (ソ)
-        [81, 28.0 * e, 1.0 * e], // A5 (ラ)
-        [84, 29.0 * e, 1.0 * e], // C6 (ド)
-        [86, 30.0 * e, 2.0 * e], // D6 (レー)
-        [83, 32.0 * e, 1.0 * e], // B5 (シ)
-        [86, 33.0 * e, 1.0 * e], // D6 (レ)
-        // Bar 5: Cadd9 終止（「ドーーー」＋キラキラ上昇ベル余韻）
-        [84, 34.0 * e, 5.2 * e], // C6 (ドー)
+        // Bar 1: FM7 (4e) -> G7 (4e)
+        [81, 1.0 * e, 1.0 * e], // A5 (裏拍から入る!)
+        [84, 2.0 * e, 1.0 * e], // C6
+        [88, 3.0 * e, 2.0 * e], // E6 (小節中盤へタイでシンコペート!)
+        [86, 5.0 * e, 1.0 * e], // D6
+        [84, 6.0 * e, 1.0 * e], // C6
+        [83, 7.0 * e, 2.0 * e], // B5 (Bar 2 頭へタイ!)
+        // Bar 2: Em7 (4e) -> Am7 (4e)
+        [79, 9.0 * e, 1.0 * e],  // G5
+        [83, 10.0 * e, 1.0 * e], // B5
+        [86, 11.0 * e, 2.0 * e], // D6 (シンコペート!)
+        [84, 13.0 * e, 1.0 * e], // C6
+        [83, 14.0 * e, 1.0 * e], // B5
+        [81, 15.0 * e, 2.0 * e], // A5 (Bar 3 頭へタイ!)
+        // Bar 3: Dm7 (4e) -> G7 (4e)
+        [77, 17.0 * e, 1.0 * e], // F5
+        [81, 18.0 * e, 1.0 * e], // A5
+        [84, 19.0 * e, 2.0 * e], // C6
+        [83, 21.0 * e, 1.0 * e], // B5
+        [84, 22.0 * e, 1.0 * e], // C6
+        [86, 23.0 * e, 2.5 * e], // D6 (高揚して伸ばす!)
+        // Bar 4: Em7 (2e) -> A7sus4/A7 (2e) -> Dm7 (2e) -> G7 (2e)
+        [88, 26.0 * e, 1.5 * e], // E6
+        [86, 27.5 * e, 0.5 * e], // D6
+        [85, 28.0 * e, 1.5 * e], // C#6 (切ないA7の色合い!)
+        [86, 29.5 * e, 0.5 * e], // D6
+        [88, 30.0 * e, 1.0 * e], // E6
+        [86, 31.0 * e, 1.0 * e], // D6
+        // Bar 5: Cadd9 終止
+        [84, 32.0 * e, 5.2 * e], // C6
       ];
       for (const [m, off, d] of lead) {
         scheduleVoice(m, off, d, 'sakurai_lead', 1.08);
       }
 
-      // 櫻井作品特有の8分音符エレピ分散和音＋順次下降ベースライン（伴奏は 48〜69 の中低域に収める）
+      // 1拍目 (0.0*e) から始まる伴奏コード＆ベース（だから主旋律の「ずらし入り」が際立つ！）
       const accomp = [
-        { bass: 48, t: 2 * e, notes: [60, 64, 67, 64] },  // C
-        { bass: 47, t: 6 * e, notes: [59, 62, 67, 62] },  // G/B
-        { bass: 45, t: 10 * e, notes: [57, 60, 64, 60] }, // Am7
-        { bass: 43, t: 14 * e, notes: [55, 59, 64, 59] }, // Em7/G
-        { bass: 41, t: 18 * e, notes: [57, 60, 65, 60] }, // F
-        { bass: 40, t: 22 * e, notes: [55, 60, 64, 60] }, // C/E
-        { bass: 38, t: 26 * e, notes: [57, 62, 65, 62] }, // Dm7
-        { bass: 43, t: 30 * e, notes: [55, 60, 65, 59] }, // G7sus4 -> G7
+        { bass: 41, t: 0 * e, notes: [57, 60, 64, 60] },  // FM7
+        { bass: 43, t: 4 * e, notes: [55, 59, 62, 65] },  // G7
+        { bass: 40, t: 8 * e, notes: [55, 59, 62, 59] },  // Em7
+        { bass: 45, t: 12 * e, notes: [57, 60, 64, 60] }, // Am7
+        { bass: 38, t: 16 * e, notes: [53, 57, 60, 62] }, // Dm7
+        { bass: 43, t: 20 * e, notes: [55, 59, 62, 65] }, // G7
+        { bass: 40, t: 24 * e, notes: [55, 59, 64, 59] }, // Em7 / A7
+        { bass: 43, t: 28 * e, notes: [53, 57, 62, 59] }, // Dm7 -> G7
       ];
       for (const bar of accomp) {
-        scheduleVoice(bar.bass, bar.t, 3.9 * e, 'bass', 0.88);
+        scheduleVoice(bar.bass, bar.t, 3.8 * e, 'bass', 0.88);
         bar.notes.forEach((n, idx) => {
-          scheduleVoice(n, bar.t + idx * e, 1.4 * e, 'ep_chord', 0.65);
+          scheduleVoice(n, bar.t + idx * e, 1.35 * e, 'ep_chord', 0.66);
         });
+        scheduleShimmer(bar.t + 2 * e, 1.0);
+        scheduleShimmer(bar.t + 3 * e, 0.55);
       }
-      // 最終 Cadd9 コード＋高音ベルアルペジオ余韻
-      scheduleVoice(48, 34 * e, 5.5 * e, 'bass', 0.94);
-      scheduleChord([60, 62, 64, 67], 34 * e, 5.5 * e, 'ep_chord', 0.72);
-      scheduleVoice(86, 34.6 * e, 3.8 * e, 'sakurai_lead', 0.52); // D6
-      scheduleVoice(88, 35.2 * e, 3.5 * e, 'sakurai_lead', 0.52); // E6
-      scheduleVoice(91, 35.8 * e, 3.2 * e, 'sakurai_lead', 0.58); // G6
+      // 最終 Cadd9 解決＋澄んだベルアルペジオ余韻
+      scheduleVoice(48, 32 * e, 5.5 * e, 'bass', 0.94);
+      scheduleChord([55, 60, 62, 64, 67], 32 * e, 5.5 * e, 'ep_chord', 0.74);
+      scheduleVoice(86, 32.7 * e, 3.8 * e, 'sakurai_lead', 0.50); // D6
+      scheduleVoice(88, 33.4 * e, 3.5 * e, 'sakurai_lead', 0.50); // E6
+      scheduleVoice(91, 34.1 * e, 3.2 * e, 'sakurai_lead', 0.56); // G6
     }
 
     this.isMelodyPlaying = true;

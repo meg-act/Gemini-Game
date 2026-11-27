@@ -47,7 +47,7 @@
             </div>
 
             <div class="config-group">
-              <label class="config-label">空と光の時間帯</label>
+              <label class="config-label">空と光の時間帯 ＆ 天候</label>
               <div class="seg-buttons" id="time-select">
                 <button type="button" class="seg-btn active" data-preset="magic_hour" id="btn-preset-magic">
                   茜色マジックアワー
@@ -59,16 +59,24 @@
                   群青の薄暮
                 </button>
               </div>
+              <div class="seg-buttons" id="weather-select" style="margin-top: 8px">
+                <button type="button" class="seg-btn active" data-weather="clear" id="btn-weather-clear">
+                  晴天（ドライレール）
+                </button>
+                <button type="button" class="seg-btn" data-weather="rain" id="btn-weather-rain">
+                  雨天（ワイパー・耐雪制動・湿潤粘着）
+                </button>
+              </div>
             </div>
           </div>
 
           <div class="controls-summary">
             <div class="key-item"><kbd>S</kbd> / <kbd>↓</kbd> 手前に引く（ブレーキ解除・加速 P1〜P5）</div>
             <div class="key-item"><kbd>W</kbd> / <kbd>↑</kbd> 奥に押す（力行解除・制動 B1〜B8）</div>
-            <div class="key-item"><kbd>Space</kbd> 惰行 (N) 戻し</div>
-            <div class="key-item"><kbd>BS</kbd> / <kbd>E</kbd> 非常ブレーキ (EB)</div>
-            <div class="key-item"><kbd>H</kbd> / <kbd>Enter</kbd> 警笛</div>
+            <div class="key-item"><kbd>Space</kbd> 惰行 (N) 戻し · <kbd>BS</kbd>/<kbd>E</kbd> 非常 (EB)</div>
+            <div class="key-item"><kbd>H</kbd> / <kbd>Enter</kbd> 警笛 · <kbd>L</kbd> 前照灯（強/減光）</div>
             <div class="key-item"><kbd>D</kbd> 停車時ドア開閉 · <kbd>F</kbd> 発車メロディ</div>
+            <div class="key-item"><kbd>R</kbd> 雨天モード · <kbd>Y</kbd> ワイパー · <kbd>B</kbd> 耐雪制動</div>
             <div class="key-item"><kbd>V</kbd> 視点切替 · <kbd>P</kbd> 別窓計器パネル (SideCar)</div>
             <div class="key-item"><kbd>T</kbd> ザ・ワールド（時間停止・自由カメラ）</div>
           </div>
@@ -94,10 +102,13 @@
               <option value="0">日暮里駅 4番線 発車 (0.0 km)</option>
               <option value="125">日暮里 片渡り分岐・14線コリドー (0.1 km)</option>
               <option value="220">日暮里〜三河島 大カーブ手前 (0.2 km)</option>
+              <option value="1100">三河島手前・尾竹橋通り立体交差 (1.1 km)</option>
               <option value="1200">三河島駅 1番線 (1.2 km)</option>
+              <option value="2180">明治通り交差・高架直線 (2.2 km)</option>
               <option value="2460">南千住ガスタンク・隅田川貨物駅 (2.5 km)</option>
               <option value="3400">南千住駅 1番線・スカイツリー遠望 (3.4 km)</option>
               <option value="3780">隅田川橋梁 アプローチ (3.8 km)</option>
+              <option value="4360">千住関屋・京成本線アンダークロス (4.4 km)</option>
               <option value="4820">北千住駅 2面3線 進入分岐 (4.8 km)</option>
             </select>
 
@@ -106,6 +117,16 @@
               <option value="golden_hour">黄金色の夕暮れ</option>
               <option value="twilight">群青の薄暮</option>
             </select>
+
+            <button type="button" id="btn-toggle-weather" class="hud-tool-btn" title="天候切替 (R)">
+              天候: 晴 (R)
+            </button>
+            <button type="button" id="btn-toggle-wiper" class="hud-tool-btn" title="ワイパー動作切替 (Y)">
+              ワイパー: OFF
+            </button>
+            <button type="button" id="btn-toggle-beam" class="hud-tool-btn" title="前照灯 ハイビーム/減光 (L)">
+              前照灯: 強
+            </button>
 
             <button
               type="button"
@@ -137,6 +158,15 @@
 
         <!-- 駅停車・案内トースト（スコアなし・純粋な停止位置と路線案内のみ） -->
         <div id="status-toast" class="status-toast hidden" role="status" aria-live="polite"></div>
+
+        <!-- 車内自動放送・駅ATOS放送・運転士指差喚呼 字幕ティッカー -->
+        <div id="comms-caption" class="comms-caption hidden" aria-live="polite">
+          <span id="comms-badge" class="comms-badge kind-call">指差喚呼</span>
+          <div class="comms-body">
+            <p id="comms-text-jp" class="comms-jp"></p>
+            <p id="comms-text-en" class="comms-en hidden"></p>
+          </div>
+        </div>
 
         <!-- ザ・ワールド（時間停止＋スペクテイター）専用ボトムバー -->
         <div id="the-world-banner" class="the-world-banner hidden" role="status" aria-live="polite">

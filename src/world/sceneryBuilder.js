@@ -403,6 +403,190 @@ function createSignCellGeo(cellIdx) {
 }
 
 /**
+ * 幹線道路・側道を走る自動車（乗用車・タクシー・配送トラック・都営バス）＆前後ライト用ジオメトリ（+Z = 進行方向前方）
+ */
+function createVehicleGeometries() {
+  // 1. セダン・乗用車 (全長 4.4m, 全幅 1.78m, 全高 1.46m)
+  const sedanParts = [];
+  const lower = new THREE.BoxGeometry(1.76, 0.64, 4.36);
+  lower.translate(0, 0.50, 0);
+  sedanParts.push(lower);
+  const cabin = new THREE.BoxGeometry(1.52, 0.56, 2.25);
+  cabin.translate(0, 1.08, -0.22);
+  sedanParts.push(cabin);
+  for (const wx of [-0.78, 0.78]) {
+    for (const wz of [-1.32, 1.34]) {
+      const wheel = new THREE.CylinderGeometry(0.32, 0.32, 0.22, 10);
+      wheel.rotateZ(Math.PI / 2);
+      wheel.translate(wx, 0.32, wz);
+      sedanParts.push(wheel);
+    }
+  }
+  const sedan = mergeBufferGeos(sedanParts);
+
+  // 2. 2t/4t パネル配送トラック (全長 6.4m, 全幅 2.16m, 全高 2.95m)
+  const truckParts = [];
+  const chassis = new THREE.BoxGeometry(1.95, 0.42, 6.20);
+  chassis.translate(0, 0.46, 0);
+  truckParts.push(chassis);
+  const cab = new THREE.BoxGeometry(2.06, 1.78, 1.52);
+  cab.translate(0, 1.48, 2.34);
+  truckParts.push(cab);
+  const box = new THREE.BoxGeometry(2.18, 2.22, 4.55);
+  box.translate(0, 1.78, -0.82);
+  truckParts.push(box);
+  for (const wx of [-0.92, 0.92]) {
+    for (const wz of [-1.85, 2.15]) {
+      const wheel = new THREE.CylinderGeometry(0.40, 0.40, 0.26, 10);
+      wheel.rotateZ(Math.PI / 2);
+      wheel.translate(wx, 0.40, wz);
+      truckParts.push(wheel);
+    }
+  }
+  const truck = mergeBufferGeos(truckParts);
+
+  // 3. 路線バス（都営バスタイプ: 全長 10.4m, 全幅 2.48m, 全高 3.08m）
+  const busParts = [];
+  const busBody = new THREE.BoxGeometry(2.46, 2.58, 10.36);
+  busBody.translate(0, 1.62, 0);
+  busParts.push(busBody);
+  const busAc = new THREE.BoxGeometry(1.75, 0.28, 3.60);
+  busAc.translate(0, 3.04, 0.6);
+  busParts.push(busAc);
+  for (const wx of [-1.08, 1.08]) {
+    for (const wz of [-3.05, 3.15]) {
+      const wheel = new THREE.CylinderGeometry(0.46, 0.46, 0.28, 10);
+      wheel.rotateZ(Math.PI / 2);
+      wheel.translate(wx, 0.46, wz);
+      busParts.push(wheel);
+    }
+  }
+  const bus = mergeBufferGeos(busParts);
+
+  // 左右1対のヘッドライト・テールライト単位ジオメトリ（スケールで車種幅・長さに合わせる）
+  const leftLamp = new THREE.BoxGeometry(0.26, 0.16, 0.10);
+  leftLamp.translate(-0.5, 0, 0);
+  const rightLamp = new THREE.BoxGeometry(0.26, 0.16, 0.10);
+  rightLamp.translate(0.5, 0, 0);
+  const lampPair = mergeBufferGeos([leftLamp, rightLamp]);
+
+  return { sedan, truck, bus, lampPair };
+}
+
+/**
+ * 下町道路の街路灯・木製/コンクリート電柱（柱上トランス＋腕金付き）ジオメトリ
+ */
+function createStreetFurnitureGeometries() {
+  // 1. アーム付き道路街路灯ポール（高さ 6.2m、先端 x = +1.35m に灯具）
+  const pole = new THREE.CylinderGeometry(0.06, 0.10, 5.8, 7);
+  pole.translate(0, 2.9, 0);
+  const arm = new THREE.BoxGeometry(1.45, 0.07, 0.07);
+  arm.rotateZ(0.22);
+  arm.translate(0.68, 5.88, 0);
+  const hood = new THREE.BoxGeometry(0.46, 0.10, 0.24);
+  hood.translate(1.32, 6.02, 0);
+  const streetLampPole = mergeBufferGeos([pole, arm, hood]);
+
+  // 2. 東京下町の電柱（高さ 10.2m + 腕金2段 + 柱上変圧器トランスバケツ）
+  const uPole = new THREE.CylinderGeometry(0.11, 0.18, 10.2, 8);
+  uPole.translate(0, 5.1, 0);
+  const cross1 = new THREE.BoxGeometry(1.65, 0.08, 0.08);
+  cross1.translate(0, 9.45, 0.14);
+  const cross2 = new THREE.BoxGeometry(1.45, 0.08, 0.08);
+  cross2.translate(0, 8.35, 0.14);
+  const transformer = new THREE.CylinderGeometry(0.24, 0.22, 0.78, 8);
+  transformer.translate(0.32, 7.25, 0.18);
+  const utilityPole = mergeBufferGeos([uPole, cross1, cross2, transformer]);
+
+  return { streetLampPole, utilityPole };
+}
+
+/**
+ * 駅ホームの立位乗客・ベンチ着席乗客・制帽着用JR駅員の3D人物ジオメトリ（足元 y = 0 基準）
+ * 上着コート部分（インスタンスカラーで多彩に着色）と、顔肌・黒髪・スラックス・革靴・鞄（頂点カラー固定）を分離して自然な人物表現を実現！
+ */
+function createPassengerGeometries() {
+  const paintGeo = (geo, hex) => {
+    const c = new THREE.Color(hex);
+    const n = geo.attributes.position.count;
+    const arr = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) {
+      arr[i * 3] = c.r;
+      arr[i * 3 + 1] = c.g;
+      arr[i * 3 + 2] = c.b;
+    }
+    geo.setAttribute('color', new THREE.BufferAttribute(arr, 3));
+    return geo;
+  };
+
+  const mergeColoredGeos = (geos) => {
+    const base = mergeBufferGeos(geos);
+    let totalVerts = 0;
+    for (const g of geos) totalVerts += g.attributes.position.count;
+    const cols = new Float32Array(totalVerts * 3);
+    let off = 0;
+    for (const g of geos) {
+      const cAttr = g.attributes.color;
+      if (cAttr) cols.set(cAttr.array, off * 3);
+      off += g.attributes.position.count;
+    }
+    base.setAttribute('color', new THREE.BufferAttribute(cols, 3));
+    return base;
+  };
+
+  // 1A. 立位乗客：コート・ジャケット上半身（instanceColor でネイビー・ベージュ・ボルドー等に着色）
+  const torso = new THREE.BoxGeometry(0.42, 0.64, 0.24);
+  torso.translate(0, 1.07, 0);
+  const armL = new THREE.BoxGeometry(0.11, 0.54, 0.13);
+  armL.translate(-0.26, 1.05, 0.02);
+  const armR = new THREE.BoxGeometry(0.11, 0.52, 0.13);
+  armR.translate(0.26, 1.06, 0.04);
+  const standingCoat = mergeBufferGeos([torso, armL, armR]);
+
+  // 1B. 立位乗客：頭部肌・頭髪・スラックス脚・靴・ビジネス鞄（頂点カラーで常にリアルな肌色＆黒髪＆濃紺ズボン！）
+  const shoeL = paintGeo(new THREE.BoxGeometry(0.15, 0.09, 0.23).translate(-0.10, 0.045, 0.03), 0x16171a);
+  const shoeR = paintGeo(new THREE.BoxGeometry(0.15, 0.09, 0.23).translate(0.10, 0.045, 0.03), 0x16171a);
+  const legL = paintGeo(new THREE.BoxGeometry(0.15, 0.68, 0.17).translate(-0.10, 0.42, 0), 0x22262e);
+  const legR = paintGeo(new THREE.BoxGeometry(0.15, 0.68, 0.17).translate(0.10, 0.42, 0), 0x22262e);
+  const bag = paintGeo(new THREE.BoxGeometry(0.10, 0.32, 0.36).translate(-0.29, 0.80, -0.02), 0x1c1816);
+  const head = paintGeo(new THREE.SphereGeometry(0.116, 10, 8).translate(0, 1.53, 0.015), 0xdcb496);
+  const hair = paintGeo(
+    new THREE.SphereGeometry(0.124, 10, 8, 0, Math.PI * 2, 0, Math.PI * 0.62).translate(0, 1.545, -0.008),
+    0x18161a
+  );
+  const standingBase = mergeColoredGeos([shoeL, shoeR, legL, legR, bag, head, hair]);
+
+  // 2A. ベンチ着席乗客：コート上半身
+  const sTorso = new THREE.BoxGeometry(0.40, 0.56, 0.22);
+  sTorso.translate(0, 0.84, -0.05);
+  const sArmL = new THREE.BoxGeometry(0.10, 0.44, 0.12);
+  sArmL.translate(-0.24, 0.82, 0.02);
+  const sArmR = new THREE.BoxGeometry(0.10, 0.44, 0.12);
+  sArmR.translate(0.24, 0.82, 0.02);
+  const seatedCoat = mergeBufferGeos([sTorso, sArmL, sArmR]);
+
+  // 2B. ベンチ着席乗客：頭部肌・頭髪・脚スラックス
+  const shinL = paintGeo(new THREE.BoxGeometry(0.14, 0.46, 0.15).translate(-0.10, 0.23, 0.22), 0x232730);
+  const shinR = paintGeo(new THREE.BoxGeometry(0.14, 0.46, 0.15).translate(0.10, 0.23, 0.22), 0x232730);
+  const thighs = paintGeo(new THREE.BoxGeometry(0.36, 0.15, 0.40).translate(0, 0.50, 0.08), 0x232730);
+  const sHead = paintGeo(new THREE.SphereGeometry(0.114, 10, 8).translate(0, 1.25, -0.015), 0xdcb496);
+  const sHair = paintGeo(
+    new THREE.SphereGeometry(0.122, 10, 8, 0, Math.PI * 2, 0, Math.PI * 0.62).translate(0, 1.265, -0.035),
+    0x18161a
+  );
+  const seatedBase = mergeColoredGeos([shinL, shinR, thighs, sHead, sHair]);
+
+  // 3. JR駅員・車掌の制帽クラウン＆白帯バイザー（頭上に重ねて配置）
+  const capCrown = new THREE.CylinderGeometry(0.145, 0.135, 0.09, 10);
+  capCrown.translate(0, 1.64, 0.01);
+  const capVisor = new THREE.BoxGeometry(0.22, 0.025, 0.12);
+  capVisor.translate(0, 1.60, 0.11);
+  const staffCap = mergeBufferGeos([capCrown, capVisor]);
+
+  return { standingCoat, standingBase, seatedCoat, seatedBase, staffCap };
+}
+
+/**
  * JR常磐線（日暮里〜北千住）高密度現代駅構造物・実物配線施設・沿線ランドマーク・E531/E231対向列車
  */
 export class ScenerySystem {
@@ -417,15 +601,26 @@ export class ScenerySystem {
 
     this.buildingMaterials = [];
     this.signageMaterial = null;
+    this.groundMaterial = null;
+    this.roadMaterial = null;
+    this.sideRoadMaterial = null;
+    this.platformTopMaterials = [];
     this.obstructionLights = [];
     this.waterMaterial = null;
     this.oncomingTrains = [];
     this.parallelTrains = [];
+    this.roadVehicles = [];
+    this.vehicleBodyInsts = {};
+    this.vehicleHeadlightInst = null;
+    this.vehicleTaillightInst = null;
+    this._vehicleDummy = new THREE.Object3D();
 
     this._buildUrbanGroundAndViaductPiers();
+    this._buildArterialRoadsAndTraffic();
     this._buildStations();
     this._buildNipporiComplex();
     this._buildKitaSenjuComplex();
+    this._buildPlatformPassengersAndStaff();
     this._buildSumidaRiverAndTrussBridge();
     this._buildLandmarksAndFreightYard();
     this._buildCityscape();
@@ -441,15 +636,41 @@ export class ScenerySystem {
     }
   }
 
+  setWetness(wetAmount) {
+    const w = THREE.MathUtils.clamp(wetAmount, 0, 1);
+    if (this.groundMaterial) {
+      this.groundMaterial.roughness = THREE.MathUtils.lerp(0.90, 0.22, w);
+      this.groundMaterial.metalness = THREE.MathUtils.lerp(0.06, 0.22, w);
+      this.groundMaterial.envMapIntensity = THREE.MathUtils.lerp(0.48, 1.65, w);
+    }
+    for (const rMat of [this.roadMaterial, this.sideRoadMaterial]) {
+      if (!rMat) continue;
+      rMat.roughness = THREE.MathUtils.lerp(0.80, 0.15, w);
+      rMat.metalness = THREE.MathUtils.lerp(0.08, 0.28, w);
+      rMat.envMapIntensity = THREE.MathUtils.lerp(0.65, 2.15, w);
+    }
+    for (const pMat of this.platformTopMaterials) {
+      if (!pMat) continue;
+      pMat.roughness = THREE.MathUtils.lerp(0.82, 0.26, w);
+      pMat.metalness = THREE.MathUtils.lerp(0.06, 0.18, w);
+      pMat.envMapIntensity = THREE.MathUtils.lerp(0.75, 1.80, w);
+    }
+  }
+
   _buildUrbanGroundAndViaductPiers() {
     const groundGeo = new THREE.PlaneGeometry(18000, 18000);
     groundGeo.rotateX(-Math.PI / 2);
+    if (this.textures.urbanGround) {
+      this.textures.urbanGround.repeat.set(160, 160);
+    }
     const groundMat = new THREE.MeshStandardMaterial({
-      color: 0x1e2024,
-      roughness: 0.94,
-      metalness: 0.05,
-      envMapIntensity: 0.35,
+      color: this.textures.urbanGround ? 0xd8dce2 : 0x1e2024,
+      map: this.textures.urbanGround || null,
+      roughness: 0.90,
+      metalness: 0.06,
+      envMapIntensity: 0.48,
     });
+    this.groundMaterial = groundMat;
     const ground = new THREE.Mesh(groundGeo, groundMat);
     ground.position.set(900, 0, -2200);
     ground.receiveShadow = true;
@@ -493,6 +714,537 @@ export class ScenerySystem {
   }
 
   /**
+   * 高架下の幹線道路4本（尾竹橋通り・明治通り・国道4号日光街道・墨堤通り）＋高架脇側道＋街路灯・電柱・街路樹＋双方向走行車両群
+   */
+  _buildArterialRoadsAndTraffic() {
+    const rng = mulberry32(531231);
+    this.arterialCorridors = [];
+
+    const roadMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      map: this.textures.arterialRoad || null,
+      roughness: 0.80,
+      metalness: 0.08,
+      envMapIntensity: 0.65,
+    });
+    this.roadMaterial = roadMat;
+
+    const sideRoadMat = new THREE.MeshStandardMaterial({
+      color: 0x262a31,
+      roughness: 0.82,
+      metalness: 0.08,
+      envMapIntensity: 0.60,
+    });
+    this.sideRoadMaterial = sideRoadMat;
+
+    const avenueConfigs = [
+      { name: '尾竹橋通り', d: 1110, skew: 0.12, width: 22.0, length: 540 },
+      { name: '明治通り', d: 2180, skew: -0.18, width: 26.0, length: 580 },
+      { name: '国道4号・日光街道', d: 3130, skew: 0.15, width: 28.0, length: 620 },
+      { name: '墨堤通り', d: 4310, skew: -0.10, width: 20.0, length: 500 },
+    ];
+
+    const lampItems = [];
+    const lampBulbItems = [];
+    const utilPoleItems = [];
+    const treeItems = [];
+    const trafficSignalGroup = new THREE.Group();
+
+    const sigPoleMat = new THREE.MeshStandardMaterial({
+      color: 0x565e66,
+      metalness: 0.55,
+      roughness: 0.45,
+    });
+    const sigGreenMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.2, 2.8, 1.4) });
+    const sigRedMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(3.0, 0.22, 0.14) });
+
+    // 1. 4大幹線道路メッシュ＋歩道街路灯＋イチョウ・ケヤキ街路樹＋交差点信号機＋走行車両登録
+    for (let aIdx = 0; aIdx < avenueConfigs.length; aIdx++) {
+      const av = avenueConfigs[aIdx];
+      const f = this.route.getFrameAt(av.d);
+      const upOff = this.route.getUpTrackOffset(av.d);
+      const horizRight = new THREE.Vector3().crossVectors(f.tangent, WORLD_UP).normalize();
+      const center = f.position.clone().addScaledVector(horizRight, upOff * 0.5);
+      center.y = 0.08;
+
+      const roadDir = horizRight.clone().applyAxisAngle(WORLD_UP, av.skew).normalize();
+      const roadRight = new THREE.Vector3().crossVectors(roadDir, WORLD_UP).normalize();
+      const roadYaw = Math.atan2(roadDir.x, roadDir.z);
+
+      this.arterialCorridors.push({
+        centerPos: center.clone(),
+        perpNormal: roadRight.clone(),
+        halfClearWidth: av.width * 0.5 + 8.5,
+      });
+
+      const rGeo = new THREE.PlaneGeometry(av.width, av.length, 1, 1);
+      rGeo.rotateX(-Math.PI / 2);
+      const uv = rGeo.attributes.uv;
+      const vRep = av.length / 42.0;
+      for (let i = 0; i < uv.count; i++) {
+        uv.setY(i, uv.getY(i) * vRep);
+      }
+      uv.needsUpdate = true;
+
+      const rMesh = new THREE.Mesh(rGeo, roadMat);
+      rMesh.position.copy(center);
+      rMesh.quaternion.setFromRotationMatrix(
+        new THREE.Matrix4().makeBasis(roadRight, WORLD_UP, roadDir)
+      );
+      rMesh.receiveShadow = true;
+      this.group.add(rMesh);
+
+      // 幹線道路沿いの歩道街路灯・街路樹（高架橋直下 |s| < 16m は避ける）
+      const sidewalkOff = av.width * 0.5 - 1.25;
+      for (let s = -av.length * 0.46; s <= av.length * 0.46; s += 26) {
+        if (Math.abs(s) < 17) continue;
+        for (const side of [-1, 1]) {
+          const p = center
+            .clone()
+            .addScaledVector(roadDir, s)
+            .addScaledVector(roadRight, side * sidewalkOff);
+          p.y = 0;
+          // ポールの +X アームが道路中央 (-side * roadRight) を向くよう回転設定
+          const inwardDir = roadRight.clone().multiplyScalar(-side);
+          const poleRotY = Math.atan2(-inwardDir.z, inwardDir.x);
+          lampItems.push({ x: p.x, z: p.z, rotY: poleRotY });
+          lampBulbItems.push({
+            x: p.x + inwardDir.x * 1.32,
+            y: 5.96,
+            z: p.z + inwardDir.z * 1.32,
+          });
+        }
+      }
+
+      for (let s = -av.length * 0.45 + 11; s <= av.length * 0.45; s += 18) {
+        if (Math.abs(s) < 18) continue;
+        for (const side of [-1, 1]) {
+          if (rng() < 0.18) continue;
+          const p = center
+            .clone()
+            .addScaledVector(roadDir, s)
+            .addScaledVector(roadRight, side * (sidewalkOff - 0.25));
+          treeItems.push({
+            x: p.x,
+            z: p.z,
+            scaleXZ: 2.1 + rng() * 1.1,
+            scaleY: 4.4 + rng() * 2.0,
+            huePick: rng(),
+          });
+        }
+      }
+
+      // 高架脇交差点の道路用信号機（青・赤の発光レンズが夕景のアクセントに！）
+      for (const sSign of [-24, 24]) {
+        const sp = center
+          .clone()
+          .addScaledVector(roadDir, sSign)
+          .addScaledVector(roadRight, (sSign > 0 ? -1 : 1) * sidewalkOff);
+        const sHolder = new THREE.Group();
+        sHolder.position.set(sp.x, 0, sp.z);
+        sHolder.rotation.y = roadYaw + (sSign > 0 ? Math.PI : 0);
+
+        const sPole = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.11, 5.4, 7), sigPoleMat);
+        sPole.position.y = 2.7;
+        sHolder.add(sPole);
+        const sArm = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.08, 0.08), sigPoleMat);
+        sArm.position.set(1.25, 5.15, 0);
+        sHolder.add(sArm);
+        const sBox = new THREE.Mesh(new THREE.BoxGeometry(1.05, 0.34, 0.26), sigPoleMat);
+        sBox.position.set(2.15, 5.15, 0);
+        sHolder.add(sBox);
+        const lens = new THREE.Mesh(
+          new THREE.SphereGeometry(0.11, 8, 8),
+          aIdx % 2 === 0 ? sigGreenMat : sigRedMat
+        );
+        lens.position.set(aIdx % 2 === 0 ? 1.86 : 2.44, 5.15, 0.12);
+        sHolder.add(lens);
+        trafficSignalGroup.add(sHolder);
+      }
+
+      // 幹線道路4車線の走行車両（日本の左側通行準拠！）
+      const laneDefs = [
+        { dirSign: 1, lat: -av.width * 0.29, baseSpeed: 10.5 },
+        { dirSign: 1, lat: -av.width * 0.11, baseSpeed: 13.2 },
+        { dirSign: -1, lat: av.width * 0.11, baseSpeed: 12.8 },
+        { dirSign: -1, lat: av.width * 0.29, baseSpeed: 10.2 },
+      ];
+      for (let lIdx = 0; lIdx < laneDefs.length; lIdx++) {
+        const ld = laneDefs[lIdx];
+        const carsInLane = lIdx === 0 || lIdx === 3 ? 3 : 2;
+        for (let c = 0; c < carsInLane; c++) {
+          const typeRoll = rng();
+          const vType =
+            (lIdx === 0 || lIdx === 3) && c === 0 && aIdx < 3
+              ? 'bus'
+              : typeRoll < 0.22
+                ? 'truck'
+                : 'sedan';
+          const isTaxi = vType === 'sedan' && rng() < 0.26;
+          this._registerRoadVehicle({
+            mode: 'avenue',
+            origin: center.clone().setY(0.08),
+            forwardDir: roadDir.clone().multiplyScalar(ld.dirSign),
+            rightDir: roadRight.clone(),
+            laneLat: ld.lat,
+            s: -av.length * 0.46 + ((c + rng() * 0.55) / carsInLane) * av.length * 0.92,
+            minS: -av.length * 0.48,
+            maxS: av.length * 0.48,
+            speed: ld.baseSpeed + rng() * 2.6,
+            vType,
+            isTaxi,
+            rng,
+          });
+        }
+      }
+    }
+    this.group.add(trafficSignalGroup);
+
+    // 2. 高架橋沿いの側道（下町生活道路）＋ 電柱 ＋ 街路灯 ＋ 側道走行車両
+    const sideRoadSpans = [
+      { d0: 190, d1: 945, left: true, right: true },
+      { d0: 1255, d1: 2335, left: true, right: true },
+      { d0: 3445, d1: 3900, left: true, right: false },
+      { d0: 4225, d1: 4795, left: true, right: false },
+    ];
+
+    for (const sp of sideRoadSpans) {
+      for (const side of [-1, 1]) {
+        if (side < 0 && !sp.left) continue;
+        if (side > 0 && !sp.right) continue;
+
+        const posArr = [];
+        const uvArr = [];
+        const idxArr = [];
+        const step = 8.0;
+        const n = Math.floor((sp.d1 - sp.d0) / step) + 1;
+        for (let i = 0; i < n; i++) {
+          const d = Math.min(sp.d1, sp.d0 + i * step);
+          const f = this.route.getFrameAt(d);
+          const upOff = side > 0 ? this.route.getUpTrackOffset(d) : 0;
+          const r = new THREE.Vector3().crossVectors(f.tangent, WORLD_UP).normalize();
+          const cLat = side * (upOff + 7.4);
+          const halfW = 3.2;
+
+          for (const k of [-1, 1]) {
+            const p = f.position.clone().addScaledVector(r, cLat + k * halfW);
+            posArr.push(p.x, 0.045, p.z);
+            uvArr.push(k < 0 ? 0 : 1, d * 0.1);
+          }
+          if (i < n - 1) {
+            const b = i * 2;
+            idxArr.push(b, b + 2, b + 1, b + 1, b + 2, b + 3);
+          }
+
+          // 側道沿いの電柱・街路灯・植栽
+          if (i % 5 === 0) {
+            const outerP = f.position.clone().addScaledVector(r, cLat + side * 3.5);
+            utilPoleItems.push({
+              x: outerP.x,
+              z: outerP.z,
+              rotY: Math.atan2(f.tangent.x, f.tangent.z),
+            });
+          } else if (i % 4 === 2) {
+            const outerP = f.position.clone().addScaledVector(r, cLat + side * 3.3);
+            const inward = r.clone().multiplyScalar(-side);
+            lampItems.push({
+              x: outerP.x,
+              z: outerP.z,
+              rotY: Math.atan2(-inward.z, inward.x),
+            });
+            lampBulbItems.push({
+              x: outerP.x + inward.x * 1.32,
+              y: 5.96,
+              z: outerP.z + inward.z * 1.32,
+            });
+          }
+          if (i % 6 === 3 && rng() < 0.65) {
+            const tp = f.position.clone().addScaledVector(r, cLat + side * 4.4);
+            treeItems.push({
+              x: tp.x,
+              z: tp.z,
+              scaleXZ: 1.8 + rng() * 0.9,
+              scaleY: 3.8 + rng() * 1.6,
+              huePick: rng(),
+            });
+          }
+        }
+
+        const srGeo = new THREE.BufferGeometry();
+        srGeo.setAttribute('position', new THREE.Float32BufferAttribute(posArr, 3));
+        srGeo.setAttribute('uv', new THREE.Float32BufferAttribute(uvArr, 2));
+        srGeo.setIndex(idxArr);
+        srGeo.computeVertexNormals();
+        const srMesh = new THREE.Mesh(srGeo, sideRoadMat);
+        srMesh.receiveShadow = true;
+        this.group.add(srMesh);
+
+        // 側道を走る乗用車・タクシー・軽貨物
+        const carCount = Math.max(2, Math.round((sp.d1 - sp.d0) / 260));
+        for (let c = 0; c < carCount; c++) {
+          const dirSign = c % 2 === 0 ? 1 : -1;
+          const vType = rng() < 0.22 ? 'truck' : 'sedan';
+          this._registerRoadVehicle({
+            mode: 'sideroad',
+            side,
+            laneOffset: dirSign > 0 ? -1.35 : 1.35,
+            d: sp.d0 + ((c + 0.35) / carCount) * (sp.d1 - sp.d0),
+            minD: sp.d0,
+            maxD: sp.d1,
+            dirSign,
+            speed: 8.2 + rng() * 2.8,
+            vType,
+            isTaxi: vType === 'sedan' && rng() < 0.30,
+            rng,
+          });
+        }
+      }
+    }
+
+    // 3. 街路灯・電柱・街路樹の InstancedMesh 一括構築
+    const furnGeos = createStreetFurnitureGeometries();
+    const dummy = new THREE.Object3D();
+
+    if (lampItems.length > 0) {
+      const poleInst = new THREE.InstancedMesh(
+        furnGeos.streetLampPole,
+        new THREE.MeshStandardMaterial({ color: 0x626a73, metalness: 0.62, roughness: 0.42 }),
+        lampItems.length
+      );
+      for (let i = 0; i < lampItems.length; i++) {
+        dummy.position.set(lampItems[i].x, 0, lampItems[i].z);
+        dummy.scale.set(1, 1, 1);
+        dummy.rotation.set(0, lampItems[i].rotY, 0);
+        dummy.updateMatrix();
+        poleInst.setMatrixAt(i, dummy.matrix);
+      }
+      poleInst.instanceMatrix.needsUpdate = true;
+      this.group.add(poleInst);
+
+      const bulbInst = new THREE.InstancedMesh(
+        new THREE.BoxGeometry(0.42, 0.08, 0.22),
+        new THREE.MeshBasicMaterial({ color: new THREE.Color(3.2, 2.85, 2.2) }),
+        lampBulbItems.length
+      );
+      for (let i = 0; i < lampBulbItems.length; i++) {
+        dummy.position.set(lampBulbItems[i].x, lampBulbItems[i].y, lampBulbItems[i].z);
+        dummy.scale.set(1, 1, 1);
+        dummy.rotation.set(0, 0, 0);
+        dummy.updateMatrix();
+        bulbInst.setMatrixAt(i, dummy.matrix);
+      }
+      bulbInst.instanceMatrix.needsUpdate = true;
+      this.group.add(bulbInst);
+    }
+
+    if (utilPoleItems.length > 0) {
+      const uInst = new THREE.InstancedMesh(
+        furnGeos.utilityPole,
+        new THREE.MeshStandardMaterial({ color: 0x7e8286, roughness: 0.86, metalness: 0.08 }),
+        utilPoleItems.length
+      );
+      for (let i = 0; i < utilPoleItems.length; i++) {
+        dummy.position.set(utilPoleItems[i].x, 0, utilPoleItems[i].z);
+        dummy.scale.set(1, 1, 1);
+        dummy.rotation.set(0, utilPoleItems[i].rotY, 0);
+        dummy.updateMatrix();
+        uInst.setMatrixAt(i, dummy.matrix);
+      }
+      uInst.instanceMatrix.needsUpdate = true;
+      this.group.add(uInst);
+    }
+
+    if (treeItems.length > 0) {
+      const trunkGeo = new THREE.CylinderGeometry(0.11, 0.16, 1.0, 6);
+      trunkGeo.translate(0, 0.5, 0);
+      const trunkInst = new THREE.InstancedMesh(
+        trunkGeo,
+        new THREE.MeshStandardMaterial({ color: 0x4b3a2c, roughness: 0.92 }),
+        treeItems.length
+      );
+      const crownGeo = new THREE.DodecahedronGeometry(0.65, 1);
+      crownGeo.translate(0, 0.82, 0);
+      const crownInst = new THREE.InstancedMesh(
+        crownGeo,
+        new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.88 }),
+        treeItems.length
+      );
+      const treeCols = [
+        new THREE.Color(0x335334), // ケヤキ深緑
+        new THREE.Color(0x466336), // 街路樹オリーブグリーン
+        new THREE.Color(0x88762c), // 色づき始めたイチョウ黄緑
+        new THREE.Color(0xb58928), // 秋暮れのイチョウ黄金葉アクセント
+      ];
+      for (let i = 0; i < treeItems.length; i++) {
+        const t = treeItems[i];
+        dummy.position.set(t.x, 0, t.z);
+        dummy.scale.set(1, t.scaleY * 0.48, 1);
+        dummy.rotation.set(0, i * 0.7, 0);
+        dummy.updateMatrix();
+        trunkInst.setMatrixAt(i, dummy.matrix);
+
+        dummy.position.set(t.x, t.scaleY * 0.34, t.z);
+        dummy.scale.set(t.scaleXZ, t.scaleY * 0.62, t.scaleXZ);
+        dummy.rotation.set(0, i * 1.1, 0);
+        dummy.updateMatrix();
+        crownInst.setMatrixAt(i, dummy.matrix);
+        const cIdx = t.huePick < 0.45 ? 0 : t.huePick < 0.75 ? 1 : t.huePick < 0.90 ? 2 : 3;
+        crownInst.setColorAt(i, treeCols[cIdx]);
+      }
+      trunkInst.instanceMatrix.needsUpdate = true;
+      crownInst.instanceMatrix.needsUpdate = true;
+      if (crownInst.instanceColor) crownInst.instanceColor.needsUpdate = true;
+      this.group.add(trunkInst);
+      this.group.add(crownInst);
+    }
+
+    // 4. 全登録車両のボディ＆前後ライト InstancedMesh 構築
+    const vGeos = createVehicleGeometries();
+    const bodyMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      roughness: 0.32,
+      metalness: 0.45,
+      envMapIntensity: 1.35,
+    });
+    for (const vType of ['sedan', 'truck', 'bus']) {
+      const list = this.roadVehicles.filter((v) => v.vType === vType);
+      if (!list.length) continue;
+      const inst = new THREE.InstancedMesh(vGeos[vType], bodyMat, list.length);
+      inst.castShadow = true;
+      for (let i = 0; i < list.length; i++) {
+        list[i].typeSlot = i;
+        inst.setColorAt(i, list[i].color);
+      }
+      if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
+      this.vehicleBodyInsts[vType] = inst;
+      this.group.add(inst);
+    }
+
+    if (this.roadVehicles.length > 0) {
+      this.vehicleHeadlightInst = new THREE.InstancedMesh(
+        vGeos.lampPair,
+        new THREE.MeshBasicMaterial({ color: new THREE.Color(4.2, 4.0, 3.5) }),
+        this.roadVehicles.length
+      );
+      this.vehicleTaillightInst = new THREE.InstancedMesh(
+        vGeos.lampPair,
+        new THREE.MeshBasicMaterial({ color: new THREE.Color(3.8, 0.16, 0.12) }),
+        this.roadVehicles.length
+      );
+      this.group.add(this.vehicleHeadlightInst);
+      this.group.add(this.vehicleTaillightInst);
+      this._updateRoadVehicles(0);
+    }
+  }
+
+  _registerRoadVehicle(cfg) {
+    const { vType, isTaxi, rng } = cfg;
+    const sedanCols = [
+      new THREE.Color(0xe6eaef), // パールホワイト
+      new THREE.Color(0x9ea6b0), // メタリックシルバー
+      new THREE.Color(0x20252d), // ブラックマイカ
+      new THREE.Color(0x274978), // ディープブルー
+      new THREE.Color(0x88242a), // ワインレッド
+    ];
+    let color;
+    if (vType === 'bus') {
+      color = new THREE.Color(0x639e46); // 都営バスライトグリーン＆アイボリー調
+    } else if (vType === 'truck') {
+      color = rng() < 0.72 ? new THREE.Color(0xebeff4) : new THREE.Color(0x3a6ea5);
+    } else if (isTaxi) {
+      color = rng() < 0.55 ? new THREE.Color(0xe3b419) : new THREE.Color(0x1f2836); // 東京イエロー/深藍タクシー
+    } else {
+      color = sedanCols[Math.floor(rng() * sedanCols.length)];
+    }
+
+    const halfLen = vType === 'bus' ? 5.20 : vType === 'truck' ? 3.16 : 2.20;
+    const lampSpan = vType === 'bus' ? 1.85 : vType === 'truck' ? 1.62 : 1.28;
+    const lampY = vType === 'bus' ? 0.84 : vType === 'truck' ? 0.78 : 0.64;
+
+    this.roadVehicles.push({
+      ...cfg,
+      color,
+      halfLen,
+      lampSpan,
+      lampY,
+      globalSlot: this.roadVehicles.length,
+      typeSlot: 0,
+    });
+  }
+
+  _updateRoadVehicles(dt) {
+    if (!this.roadVehicles.length) return;
+    const dummy = this._vehicleDummy;
+    const pos = new THREE.Vector3();
+    const dir = new THREE.Vector3();
+
+    for (let i = 0; i < this.roadVehicles.length; i++) {
+      const v = this.roadVehicles[i];
+      if (v.mode === 'avenue') {
+        v.s += v.speed * dt;
+        if (v.s > v.maxS) v.s = v.minS;
+        // forwardDir が -roadDir の場合は s 進行方向に合わせて移動
+        pos
+          .copy(v.origin)
+          .addScaledVector(v.forwardDir, v.s)
+          .addScaledVector(v.rightDir, v.laneLat);
+        dir.copy(v.forwardDir);
+      } else {
+        v.d += v.dirSign * v.speed * dt;
+        if (v.dirSign > 0 && v.d > v.maxD) v.d = v.minD;
+        if (v.dirSign < 0 && v.d < v.minD) v.d = v.maxD;
+        const f = this.route.getFrameAt(v.d);
+        const upOff = v.side > 0 ? this.route.getUpTrackOffset(v.d) : 0;
+        const r = new THREE.Vector3().crossVectors(f.tangent, WORLD_UP).normalize();
+        const cLat = v.side * (upOff + 7.4) + v.laneOffset;
+        pos.copy(f.position).addScaledVector(r, cLat);
+        pos.y = 0.05;
+        dir.copy(f.tangent).multiplyScalar(v.dirSign);
+      }
+
+      const yaw = Math.atan2(dir.x, dir.z);
+      const bodyInst = this.vehicleBodyInsts[v.vType];
+      if (bodyInst) {
+        dummy.position.copy(pos);
+        dummy.rotation.set(0, yaw, 0);
+        dummy.scale.set(1, 1, 1);
+        dummy.updateMatrix();
+        bodyInst.setMatrixAt(v.typeSlot, dummy.matrix);
+      }
+
+      if (this.vehicleHeadlightInst) {
+        dummy.position.set(
+          pos.x + dir.x * v.halfLen,
+          pos.y + v.lampY,
+          pos.z + dir.z * v.halfLen
+        );
+        dummy.rotation.set(0, yaw, 0);
+        dummy.scale.set(v.lampSpan, 1, 1);
+        dummy.updateMatrix();
+        this.vehicleHeadlightInst.setMatrixAt(v.globalSlot, dummy.matrix);
+      }
+
+      if (this.vehicleTaillightInst) {
+        dummy.position.set(
+          pos.x - dir.x * v.halfLen,
+          pos.y + v.lampY + 0.08,
+          pos.z - dir.z * v.halfLen
+        );
+        dummy.rotation.set(0, yaw, 0);
+        dummy.scale.set(v.lampSpan, 1, 1);
+        dummy.updateMatrix();
+        this.vehicleTaillightInst.setMatrixAt(v.globalSlot, dummy.matrix);
+      }
+    }
+
+    for (const key of Object.keys(this.vehicleBodyInsts)) {
+      this.vehicleBodyInsts[key].instanceMatrix.needsUpdate = true;
+    }
+    if (this.vehicleHeadlightInst) this.vehicleHeadlightInst.instanceMatrix.needsUpdate = true;
+    if (this.vehicleTaillightInst) this.vehicleTaillightInst.instanceMatrix.needsUpdate = true;
+  }
+
+  /**
    * 現代のJR東日本らしい情報量豊かな全4駅（ATOS発車標・黄色出口案内・ITV監視モニタ・待合室・階段室・自販機・橋上駅舎）
    */
   _buildStations() {
@@ -508,6 +1260,7 @@ export class ScenerySystem {
       metalness: 0.06,
       envMapIntensity: 0.75,
     });
+    this.platformTopMaterials.push(platformTopMat);
     const roofMat = new THREE.MeshStandardMaterial({
       color: 0x383e45,
       metalness: 0.58,
@@ -1148,6 +1901,7 @@ export class ScenerySystem {
       roughness: 0.82,
       metalness: 0.06,
     });
+    this.platformTopMaterials.push(platTopMat);
     const ledMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(2.3, 2.28, 2.1) });
 
     // 1. 常磐線4番線↔東北本線5番線相当の間の防護柵 (x = -2.28m) ＆ 東北本線8番線相当↔新幹線掘割の防護柵 (x = -19.1m)
@@ -1513,6 +2267,7 @@ export class ScenerySystem {
       roughness: 0.82,
       metalness: 0.06,
     });
+    this.platformTopMaterials.push(topMat);
     const sideMat = new THREE.MeshStandardMaterial({
       color: 0x6d7073,
       map: this.textures.concrete.map,
@@ -1729,6 +2484,250 @@ export class ScenerySystem {
     }
 
     this.group.add(g);
+  }
+
+  /**
+   * 全4駅ホーム（＋日暮里並走ホーム・北千住2/3番線島式ホーム）の乗客・着席客・制帽着用JR駅員
+   */
+  _buildPlatformPassengersAndStaff() {
+    const rng = mulberry32(77115);
+    const pGeos = createPassengerGeometries();
+    const standingItems = [];
+    const seatedItems = [];
+    const staffCaps = [];
+
+    // 夕方の通勤・帰宅客のリアルなコート・スーツカラーパレット
+    const attirePalette = [
+      new THREE.Color(0x1f2836), // ネイビービジネススーツ
+      new THREE.Color(0x2a2d33), // チャコールグレーコート
+      new THREE.Color(0xb8a386), // ベージュトレンチコート
+      new THREE.Color(0x7c5a43), // キャメル・ブラウンウールコート
+      new THREE.Color(0x3a4a3f), // オリーブ・カーキモッズコート
+      new THREE.Color(0x562c38), // ボルドー・ワインジャケット
+      new THREE.Color(0x6e7682), // ライトグレーニット・ジャケット
+      new THREE.Color(0xd2d7de), // オフホワイトダウン・コート
+    ];
+    const jrStaffSuit = new THREE.Color(0x162238);
+
+    for (const st of STATIONS) {
+      const isLeft = st.platformSide === 'left';
+      const centerLat = isLeft ? -4.55 : 4.85;
+      const midPlatD = (st.platformStart + st.platformEnd) * 0.5;
+      const facilityOffsets = [midPlatD - 48, midPlatD + 36];
+      const density = st.id === 'kitasenju' || st.id === 'nippori' ? 0.78 : 0.52;
+
+      // 1. 黄色い点字ブロックの内側（線路中心から ±2.45m〜±3.45m）で乗車位置に並ぶ乗客
+      for (let d = st.platformStart + 14; d <= st.platformEnd - 10; d += 4.8) {
+        if (
+          Math.abs(d - facilityOffsets[0]) < 8.5 ||
+          Math.abs(d - facilityOffsets[1]) < 8.5 ||
+          Math.abs(d - (facilityOffsets[0] + 16)) < 5.0 ||
+          Math.abs(d - (facilityOffsets[1] + 16)) < 5.0
+        ) {
+          continue;
+        }
+        if (rng() > density) continue;
+
+        const f = this.route.getFrameAt(d);
+        const r = new THREE.Vector3().crossVectors(f.tangent, WORLD_UP).normalize();
+        const trackYaw = Math.atan2(f.tangent.x, f.tangent.z);
+        const queueCount = rng() < 0.36 ? 2 : 1;
+
+        for (let q = 0; q < queueCount; q++) {
+          const depthFromEdge = 2.48 + q * 0.68 + (rng() - 0.5) * 0.16;
+          const lat = isLeft ? -depthFromEdge : depthFromEdge;
+          const alongJitter = (rng() - 0.5) * 0.9;
+          const p = f.position
+            .clone()
+            .addScaledVector(r, lat)
+            .addScaledVector(f.tangent, alongJitter);
+          p.y = f.position.y + 1.10;
+
+          // 線路側（到着する列車方向）を自然に向くヨー角
+          const faceTrackYaw = trackYaw + (isLeft ? Math.PI * 0.42 : -Math.PI * 0.42) + (rng() - 0.5) * 0.32;
+          standingItems.push({
+            x: p.x,
+            y: p.y,
+            z: p.z,
+            rotY: faceTrackYaw,
+            scaleY: 0.94 + rng() * 0.11,
+            color: attirePalette[Math.floor(rng() * attirePalette.length)],
+          });
+        }
+
+        // 島式ホーム（日暮里・三河島・南千住）の反対側（上り線側）で上り列車を待つ乗客
+        if (!isLeft && rng() < density * 0.62) {
+          const upOff = this.route.getUpTrackOffset(d);
+          const upLat = Math.max(5.5, upOff - 2.52 - rng() * 0.45);
+          const pUp = f.position.clone().addScaledVector(r, upLat);
+          pUp.y = f.position.y + 1.10;
+          standingItems.push({
+            x: pUp.x,
+            y: pUp.y,
+            z: pUp.z,
+            rotY: trackYaw + Math.PI * 0.5 + (rng() - 0.5) * 0.3,
+            scaleY: 0.94 + rng() * 0.11,
+            color: attirePalette[Math.floor(rng() * attirePalette.length)],
+          });
+        }
+      }
+
+      // 2. 線路と直角向きベンチに腰掛ける乗客
+      for (let bd = st.platformStart + 35; bd <= st.platformEnd - 25; bd += 34) {
+        if (Math.abs(bd - facilityOffsets[0]) < 14 || Math.abs(bd - facilityOffsets[1]) < 14) {
+          continue;
+        }
+        const bf = this.route.getFrameAt(bd);
+        const br = new THREE.Vector3().crossVectors(bf.tangent, WORLD_UP).normalize();
+        const trackYaw = Math.atan2(bf.tangent.x, bf.tangent.z);
+        for (const seatOff of [-0.44, 0.44]) {
+          if (rng() < 0.38) continue;
+          const sp = bf.position.clone().addScaledVector(br, centerLat + seatOff);
+          sp.y = bf.position.y + 1.10;
+          seatedItems.push({
+            x: sp.x,
+            y: sp.y,
+            z: sp.z,
+            rotY: trackYaw + Math.PI, // 進行方向手前側（負のtangent方向）を向くベンチ座面
+            scaleY: 0.95 + rng() * 0.08,
+            color: attirePalette[Math.floor(rng() * attirePalette.length)],
+          });
+        }
+      }
+
+      // 3. ホーム安全確認を行う制帽着用のJR駅員（停止目標手前 ＆ ホーム中ほど）
+      for (const staffD of [st.stopDistance - 11.5, midPlatD + 6.0]) {
+        if (staffD < st.platformStart + 6 || staffD > st.platformEnd - 4) continue;
+        const sf = this.route.getFrameAt(staffD);
+        const sr = new THREE.Vector3().crossVectors(sf.tangent, WORLD_UP).normalize();
+        const trackYaw = Math.atan2(sf.tangent.x, sf.tangent.z);
+        const sLat = isLeft ? -2.38 : 2.38;
+        const sp = sf.position.clone().addScaledVector(sr, sLat);
+        sp.y = sf.position.y + 1.10;
+        const staffRot = trackYaw + Math.PI + (isLeft ? -0.35 : 0.35);
+        standingItems.push({
+          x: sp.x,
+          y: sp.y,
+          z: sp.z,
+          rotY: staffRot,
+          scaleY: 1.01,
+          color: jrStaffSuit,
+        });
+        staffCaps.push({ x: sp.x, y: sp.y, z: sp.z, rotY: staffRot });
+      }
+    }
+
+    // 4. 北千住 2・3番線島式ホーム & 日暮里 山手・京浜東北ホームの遠景乗客シルエット
+    const kitaSt = STATIONS.find((s) => s.id === 'kitasenju');
+    if (kitaSt) {
+      for (let d = kitaSt.platformStart + 16; d <= kitaSt.platformEnd - 12; d += 7.5) {
+        if (rng() > 0.65) continue;
+        const f = this.route.getFrameAt(d);
+        const r = new THREE.Vector3().crossVectors(f.tangent, WORLD_UP).normalize();
+        const trackYaw = Math.atan2(f.tangent.x, f.tangent.z);
+        const lat = rng() < 0.5 ? 6.85 : 11.45;
+        const p = f.position.clone().addScaledVector(r, lat);
+        p.y = f.position.y + 1.10;
+        standingItems.push({
+          x: p.x,
+          y: p.y,
+          z: p.z,
+          rotY: trackYaw + (lat < 9 ? -Math.PI * 0.5 : Math.PI * 0.5),
+          scaleY: 0.95 + rng() * 0.1,
+          color: attirePalette[Math.floor(rng() * attirePalette.length)],
+        });
+      }
+    }
+
+    for (let d = -195; d <= 8; d += 9.5) {
+      for (const pLat of [-34.6, -38.4, -47.4]) {
+        if (rng() > 0.48) continue;
+        const pt = this.route.getNipporiParallelPoint(d, pLat);
+        const trackYaw = Math.atan2(pt.tangent.x, pt.tangent.z);
+        standingItems.push({
+          x: pt.position.x,
+          y: pt.position.y + 1.10,
+          z: pt.position.z,
+          rotY: trackYaw + (rng() - 0.5),
+          scaleY: 0.95 + rng() * 0.1,
+          color: attirePalette[Math.floor(rng() * attirePalette.length)],
+        });
+      }
+    }
+
+    // InstancedMesh 構築（上着コート＋肌/髪/スラックス/鞄の分離マルチトーンで全駅わずか5ドローコール！）
+    const coatMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      roughness: 0.78,
+      metalness: 0.05,
+    });
+    const baseBodyMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      vertexColors: true,
+      roughness: 0.74,
+      metalness: 0.04,
+    });
+    const dummy = new THREE.Object3D();
+
+    if (standingItems.length > 0) {
+      const standCoatInst = new THREE.InstancedMesh(pGeos.standingCoat, coatMat, standingItems.length);
+      const standBaseInst = new THREE.InstancedMesh(pGeos.standingBase, baseBodyMat, standingItems.length);
+      standCoatInst.castShadow = true;
+      standBaseInst.castShadow = true;
+      for (let i = 0; i < standingItems.length; i++) {
+        const it = standingItems[i];
+        dummy.position.set(it.x, it.y, it.z);
+        dummy.rotation.set(0, it.rotY, 0);
+        dummy.scale.set(1, it.scaleY, 1);
+        dummy.updateMatrix();
+        standCoatInst.setMatrixAt(i, dummy.matrix);
+        standCoatInst.setColorAt(i, it.color);
+        standBaseInst.setMatrixAt(i, dummy.matrix);
+      }
+      standCoatInst.instanceMatrix.needsUpdate = true;
+      standBaseInst.instanceMatrix.needsUpdate = true;
+      if (standCoatInst.instanceColor) standCoatInst.instanceColor.needsUpdate = true;
+      this.group.add(standCoatInst);
+      this.group.add(standBaseInst);
+    }
+
+    if (seatedItems.length > 0) {
+      const seatCoatInst = new THREE.InstancedMesh(pGeos.seatedCoat, coatMat, seatedItems.length);
+      const seatBaseInst = new THREE.InstancedMesh(pGeos.seatedBase, baseBodyMat, seatedItems.length);
+      for (let i = 0; i < seatedItems.length; i++) {
+        const it = seatedItems[i];
+        dummy.position.set(it.x, it.y, it.z);
+        dummy.rotation.set(0, it.rotY, 0);
+        dummy.scale.set(1, it.scaleY, 1);
+        dummy.updateMatrix();
+        seatCoatInst.setMatrixAt(i, dummy.matrix);
+        seatCoatInst.setColorAt(i, it.color);
+        seatBaseInst.setMatrixAt(i, dummy.matrix);
+      }
+      seatCoatInst.instanceMatrix.needsUpdate = true;
+      seatBaseInst.instanceMatrix.needsUpdate = true;
+      if (seatCoatInst.instanceColor) seatCoatInst.instanceColor.needsUpdate = true;
+      this.group.add(seatCoatInst);
+      this.group.add(seatBaseInst);
+    }
+
+    if (staffCaps.length > 0) {
+      const capInst = new THREE.InstancedMesh(
+        pGeos.staffCap,
+        new THREE.MeshStandardMaterial({ color: 0xebeff6, roughness: 0.45, metalness: 0.15 }),
+        staffCaps.length
+      );
+      for (let i = 0; i < staffCaps.length; i++) {
+        const it = staffCaps[i];
+        dummy.position.set(it.x, it.y, it.z);
+        dummy.rotation.set(0, it.rotY, 0);
+        dummy.scale.set(1, 1.01, 1);
+        dummy.updateMatrix();
+        capInst.setMatrixAt(i, dummy.matrix);
+      }
+      capInst.instanceMatrix.needsUpdate = true;
+      this.group.add(capInst);
+    }
   }
 
   /**
@@ -2255,6 +3254,155 @@ export class ScenerySystem {
 
       this.group.add(tower);
     }
+
+    // ---- 5. 千住関屋 京成本線アンダークロス (d=4380m：常磐線高架の直下を斜めに潜り抜ける京成複線高架・盛土桁＋架線) ----
+    {
+      const kf = this.route.getFrameAt(LANDMARKS.keiseiSekiyaUnderpass);
+      const kr = new THREE.Vector3().crossVectors(kf.tangent, WORLD_UP).normalize();
+      const kCenter = kf.position.clone().addScaledVector(kr, 2.0);
+      kCenter.y = 4.55; // 常磐線(y≈11.1m)の約6.5m下を潜る実物立体交差！
+
+      const kDir = kr.clone().applyAxisAngle(WORLD_UP, 0.52).normalize();
+      const kRight = new THREE.Vector3().crossVectors(kDir, WORLD_UP).normalize();
+      const kLen = 360;
+
+      this.keiseiSekiyaCorridor = {
+        centerPos: kCenter.clone(),
+        perpNormal: kRight.clone(),
+        halfClearWidth: 11.5,
+      };
+
+      const kGroup = new THREE.Group();
+      kGroup.position.copy(kCenter);
+      kGroup.quaternion.setFromRotationMatrix(
+        new THREE.Matrix4().makeBasis(kRight, WORLD_UP, kDir)
+      );
+
+      const kDeck = new THREE.Mesh(new THREE.BoxGeometry(9.2, 1.35, kLen), concreteMat);
+      kDeck.position.y = -0.68;
+      kDeck.castShadow = true;
+      kDeck.receiveShadow = true;
+      kGroup.add(kDeck);
+
+      for (const px of [-4.45, 4.45]) {
+        const parapet = new THREE.Mesh(new THREE.BoxGeometry(0.32, 1.15, kLen), concreteMat);
+        parapet.position.set(px, 0.52, 0);
+        kGroup.add(parapet);
+      }
+
+      // 京成標準軌(1435mm)複線レール4本＋架線ビーム
+      const railMat = new THREE.MeshStandardMaterial({
+        color: 0xa4acb6,
+        metalness: 0.85,
+        roughness: 0.25,
+      });
+      for (const trackCx of [-1.9, 1.9]) {
+        for (const rx of [-0.717, 0.717]) {
+          const rMesh = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.14, kLen), railMat);
+          rMesh.position.set(trackCx + rx, 0.08, 0);
+          kGroup.add(rMesh);
+        }
+      }
+      const mastMat = new THREE.MeshStandardMaterial({
+        color: 0x6f7780,
+        metalness: 0.55,
+        roughness: 0.45,
+      });
+      for (let kz = -kLen * 0.46; kz <= kLen * 0.46; kz += 34) {
+        if (Math.abs(kz) < 16) continue; // 常磐線高架直下はビーム省略
+        for (const mx of [-4.3, 4.3]) {
+          const m = new THREE.Mesh(new THREE.BoxGeometry(0.22, 5.4, 0.22), mastMat);
+          m.position.set(mx, 2.7, kz);
+          kGroup.add(m);
+        }
+        const b = new THREE.Mesh(new THREE.BoxGeometry(8.9, 0.24, 0.24), mastMat);
+        b.position.set(0, 5.15, kz);
+        kGroup.add(b);
+      }
+      for (let kz = -kLen * 0.46; kz <= kLen * 0.46; kz += 24) {
+        for (const px of [-3.4, 3.4]) {
+          const pier = new THREE.Mesh(new THREE.BoxGeometry(0.95, 3.85, 0.95), concreteMat);
+          pier.position.set(px, -3.85 * 0.5 - 1.35, kz);
+          kGroup.add(pier);
+        }
+      }
+      this.group.add(kGroup);
+    }
+
+    // ---- 6. つくばエクスプレス（TX）・東京メトロ日比谷線 連続並走高架橋 (d=3210..4955m 右手 x=+27.5m) ----
+    {
+      const txWallMat = new THREE.MeshStandardMaterial({
+        color: 0xa6aeb8,
+        map: this.textures.concrete.map,
+        roughness: 0.74,
+        metalness: 0.08,
+      });
+      const txMastMat = new THREE.MeshStandardMaterial({
+        color: 0x68717a,
+        metalness: 0.58,
+        roughness: 0.44,
+      });
+      const step = 20;
+      const deckGeo = new THREE.BoxGeometry(8.8, 1.45, step + 0.35);
+      const wallGeo = new THREE.BoxGeometry(0.36, 1.85, step + 0.35);
+      const pierGeo = new THREE.BoxGeometry(1.05, 1.0, 1.15);
+      const portalBeamGeo = new THREE.BoxGeometry(8.9, 0.24, 0.24);
+      const portalMastGeo = new THREE.BoxGeometry(0.24, 5.4, 0.24);
+
+      const txGroup = new THREE.Group();
+      for (let d = 3210; d <= 4955; d += step) {
+        if (d > LANDMARKS.sumidaBridgeStart - 10 && d < LANDMARKS.sumidaBridgeEnd + 10) {
+          continue; // 隅田川橋梁区間は _buildSumidaRiverAndTrussBridge の並走橋桁と接続
+        }
+        const f = this.route.getFrameAt(d);
+        const r = new THREE.Vector3().crossVectors(f.tangent, WORLD_UP).normalize();
+        const q = new THREE.Quaternion().setFromRotationMatrix(
+          new THREE.Matrix4().makeBasis(r, WORLD_UP, f.tangent.clone().negate())
+        );
+        // 北千住手前では3階高架ホーム(y≈14.5m)へ向けて緩やかに高度を上げる実物線形！
+        const climb = d > 4650 ? THREE.MathUtils.smoothstep(d, 4650, 4960) * 5.8 : 0;
+        const deckPos = f.position
+          .clone()
+          .addScaledVector(r, 27.5)
+          .addScaledVector(WORLD_UP, 0.75 + climb);
+
+        const deck = new THREE.Mesh(deckGeo, concreteMat);
+        deck.quaternion.copy(q);
+        deck.position.copy(deckPos);
+        txGroup.add(deck);
+
+        for (const wx of [-4.22, 4.22]) {
+          const sw = new THREE.Mesh(wallGeo, txWallMat);
+          sw.quaternion.copy(q);
+          sw.position.copy(deckPos).addScaledVector(r, wx).addScaledVector(WORLD_UP, 1.45);
+          txGroup.add(sw);
+        }
+
+        const pierH = Math.max(2.0, deckPos.y - 0.7);
+        for (const px of [-3.2, 3.2]) {
+          const pier = new THREE.Mesh(pierGeo, concreteMat);
+          pier.quaternion.copy(q);
+          pier.position.copy(deckPos).addScaledVector(r, px);
+          pier.position.y = pierH * 0.5;
+          pier.scale.set(1, pierH, 1);
+          txGroup.add(pier);
+        }
+
+        if (d % 40 === 10) {
+          for (const mx of [-4.2, 4.2]) {
+            const pm = new THREE.Mesh(portalMastGeo, txMastMat);
+            pm.quaternion.copy(q);
+            pm.position.copy(deckPos).addScaledVector(r, mx).addScaledVector(WORLD_UP, 3.4);
+            txGroup.add(pm);
+          }
+          const pb = new THREE.Mesh(portalBeamGeo, txMastMat);
+          pb.quaternion.copy(q);
+          pb.position.copy(deckPos).addScaledVector(WORLD_UP, 5.95);
+          txGroup.add(pb);
+        }
+      }
+      this.group.add(txGroup);
+    }
   }
 
   _getOrCreateBuildingMaterial(variantIdx) {
@@ -2411,6 +3559,7 @@ export class ScenerySystem {
           }
 
           if (d > 3170 && d < 3435 && absDist < (side > 0 ? 27 : 20)) continue;
+          if (d > 3200 && d < 4965 && side > 0 && absDist > 19 && absDist < 38) continue;
           if (d > 3455 && d < 3755 && side > 0 && absDist > 34 && absDist < 92) continue;
 
           if (d > 4935 && d < 5275) {
@@ -2425,6 +3574,29 @@ export class ScenerySystem {
           const riverSignedDist =
             (pos.x - riverPos.x) * riverNormal.x + (pos.z - riverPos.z) * riverNormal.z;
           if (Math.abs(riverSignedDist) < 156) continue;
+
+          // 幹線道路4本および京成本線千住関屋アンダークロスのコリドー上には建物を建てない！
+          let hitsCorridor = false;
+          if (this.arterialCorridors) {
+            for (let c = 0; c < this.arterialCorridors.length; c++) {
+              const cor = this.arterialCorridors[c];
+              const sd =
+                (pos.x - cor.centerPos.x) * cor.perpNormal.x +
+                (pos.z - cor.centerPos.z) * cor.perpNormal.z;
+              if (Math.abs(sd) < cor.halfClearWidth) {
+                hitsCorridor = true;
+                break;
+              }
+            }
+          }
+          if (!hitsCorridor && this.keiseiSekiyaCorridor) {
+            const kc = this.keiseiSekiyaCorridor;
+            const ksd =
+              (pos.x - kc.centerPos.x) * kc.perpNormal.x +
+              (pos.z - kc.centerPos.z) * kc.perpNormal.z;
+            if (Math.abs(ksd) < kc.halfClearWidth) hitsCorridor = true;
+          }
+          if (hitsCorridor) continue;
 
           // --- 地区特性とレイヤーに応じた建物カテゴリー決定 ---
           // 下町住宅・町工場ポケットでは連続して低層建築が並び、高架車窓に瓦・トタン屋根の海と中層ビルの落差を生む！
@@ -3004,6 +4176,8 @@ export class ScenerySystem {
       const pulse = 0.45 + 0.55 * (0.5 + 0.5 * Math.sin(elapsedTime * 2.4 + light.phase));
       light.mat.color.setRGB(3.2 * pulse, 0.1 * pulse, 0.08 * pulse);
     }
+
+    this._updateRoadVehicles(dt);
 
     const basis = new THREE.Matrix4();
     const carForward = new THREE.Vector3();
