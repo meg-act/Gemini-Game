@@ -1,0 +1,2 @@
+# Drop custom audio files (.wav, .mp3, .ogg, .m4a) here.
+# TrainSoundEngine automatically loads them by filename stem (e.g. horn.mp3, door_open.wav).

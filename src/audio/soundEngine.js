@@ -1,13 +1,23 @@
 /**
- * Web Audio API による JR常磐線 E531系 リアルタイム物理音響シンセサイザー
- * 外部音声ファイル不要で以下をリアルタイム物理合成:
- *   1. 日立2レベル IGBT-VVVF（非同期キャリア＋上下PWM側帯波 fc±2fm ＆ 同期遷移＋回生ブレーキ音）＋ TDカルダン歯車音
- *   2. 駅ホームPAスピーカー残響付き 発車メロディ（日暮里・三河島・南千住・北千住 4駅オリジナルフレーズ）
- *   3. JR東日本 E531/E231系 3連ドアチャイム（E6-C6 ベル倍音）＋ リニア/空気扉開閉・戸閉ロック音
- *   4. 重厚な鋼製カムディテント・ワンハンドルマスコン操作音（Nロック・EB重打撃音別）
- *   5. 「ザ・ワールド」時間停止音（重低音ピッチドロップ＋フィルター収束＋減速時計秒針）＆ 時間再開音
- *   6. ボギー台車2軸ジョイント音・隅田川鉄橋共鳴・急カーブフランジスキール・電笛/空笛警笛・ブレーキ緩解排気音
+ * Web Audio API ＋ 実録サンプリング音源ハイブリッド JR常磐線 E531系 物理音響エンジン
+ *   - src/audio/samples/ 内の音源ファイル（.wav / .mp3 / .ogg / .m4a）またはブラウザから読み込んだ音源を自動認識して再生
+ *   - 連続走行物理音（日立IGBT-VVVF・主電動機・歯車・転動・ロングレール摺動・隅田川鉄橋・フランジ・雨音・制輪子摩擦・CP・対向列車通過中連続轟音）
+ *   - 軌道種別ごとのジョイント音（ロングレール溶接/IJ・橋梁伸縮継目EJ・25m定尺・片渡り分岐器クロッシング重打撃）
+ *   - 420Hz 大音量 車掌出発合図ブザー・ATS-P電磁チャイム・EB装置（60秒無操作警報ブザー＆リセットスイッチ音）
+ *   - ※マスコンノッチ操作音・スイッチ音・ブレーキ緩解排気音・車内4音チャイムは実機コントローラーおよび実車仕様に合わせ廃止
  */
+
+const BUNDLED_SAMPLE_URLS = import.meta.glob('./samples/*.{wav,mp3,ogg,m4a,WAV,MP3,OGG,M4A}', {
+  eager: true,
+  query: '?url',
+  import: 'default',
+});
+
+function extractStemKey(pathOrName) {
+  const base = String(pathOrName).split('/').pop() || '';
+  return base.replace(/\.[^.]+$/, '').trim().toLowerCase();
+}
+
 export class TrainSoundEngine {
   constructor() {
     this.ctx = null;
@@ -23,6 +33,16 @@ export class TrainSoundEngine {
     this.rainIntensity = 0;
     this._atsChimeTimer = null;
     this.isAtsChimeActive = false;
+
+    // EB装置（60秒無操作警報ブザー）状態
+    this.isEbBuzzerActive = false;
+    this._ebOscNodes = null;
+
+    // サンプリング音源バッファ辞書 (key -> AudioBuffer) ＆ 生バイナリ待機キュー
+    this.sampleBuffers = new Map();
+    this._pendingArrayBuffers = new Map();
+    this._bundledLoaded = false;
+    this._activeVoiceStopper = null;
   }
 
   init() {
@@ -30,6 +50,7 @@ export class TrainSoundEngine {
       if (this.ctx && this.ctx.state === 'suspended') {
         this.ctx.resume();
       }
+      this._flushPendingSamples();
       return;
     }
 
@@ -40,9 +61,9 @@ export class TrainSoundEngine {
 
     // ソフトコンプレッサー（複数音源が重なってもクリップしない自然なダイナミクス）
     const comp = this.ctx.createDynamicsCompressor();
-    comp.threshold.value = -13;
-    comp.knee.value = 16;
-    comp.ratio.value = 4.5;
+    comp.threshold.value = -12;
+    comp.knee.value = 15;
+    comp.ratio.value = 4.2;
     comp.attack.value = 0.004;
     comp.release.value = 0.14;
     comp.connect(this.ctx.destination);
@@ -50,37 +71,186 @@ export class TrainSoundEngine {
 
     // 走行・環境音用マスターゲイン（時間停止時に 0 へフェード）
     this.masterGain = this.ctx.createGain();
-    this.masterGain.gain.value = 0.84;
+    this.masterGain.gain.value = 0.86;
     this.masterGain.connect(comp);
 
-    // 時間停止音・操作UI用ゲイン（時間停止中も鳴るがユーザーミュートには追従）
+    // 時間停止音・警報・スイッチ用ゲイン（ユーザーミュートに追従）
     this.uiSfxGain = this.ctx.createGain();
-    this.uiSfxGain.gain.value = 0.90;
+    this.uiSfxGain.gain.value = 0.92;
     this.uiSfxGain.connect(comp);
 
-    // 駅ホーム天井PAスピーカー＋高天井コンコース残響チェーン（発車メロディ用）
+    // 駅ホーム天井PAスピーカー＋高天井コンコース残響チェーン（発車メロディ・駅ATOS放送用）
     this._setupStationPAChain();
 
     this._noiseBuffer = this._createPinkWhiteNoiseBuffer(3.0);
     this._setupContinuousNodes();
     this.isInitialized = true;
     this._syncMasterGain();
+    this._preloadBundledSamples();
+    this._flushPendingSamples();
+  }
+
+  /**
+   * src/audio/samples/ に配置された同梱サンプリング音源を非同期デコード
+   */
+  async _preloadBundledSamples() {
+    if (this._bundledLoaded || !this.ctx) return;
+    this._bundledLoaded = true;
+    const entries = Object.entries(BUNDLED_SAMPLE_URLS);
+    for (const [relPath, url] of entries) {
+      const key = extractStemKey(relPath);
+      if (!key || this.sampleBuffers.has(key)) continue;
+      try {
+        const res = await fetch(url);
+        if (!res.ok) continue;
+        const arr = await res.arrayBuffer();
+        const audioBuf = await this.ctx.decodeAudioData(arr);
+        this.sampleBuffers.set(key, audioBuf);
+      } catch {
+        // ignore undecodable placeholder files
+      }
+    }
+  }
+
+  async _flushPendingSamples() {
+    if (!this.ctx || this._pendingArrayBuffers.size === 0) return;
+    for (const [key, arr] of this._pendingArrayBuffers.entries()) {
+      try {
+        const audioBuf = await this.ctx.decodeAudioData(arr.slice(0));
+        this.sampleBuffers.set(key, audioBuf);
+      } catch {
+        // ignore invalid audio file
+      }
+    }
+    this._pendingArrayBuffers.clear();
+  }
+
+  /**
+   * ユーザーがファイル選択ダイアログやドラッグ＆ドロップで渡した音源ファイル群を即座に登録
+   */
+  async loadUserAudioFiles(fileList) {
+    const loadedKeys = [];
+    if (!fileList || fileList.length === 0) return loadedKeys;
+    for (const file of Array.from(fileList)) {
+      const key = extractStemKey(file.name);
+      if (!key) continue;
+      try {
+        const arr = await file.arrayBuffer();
+        if (this.ctx) {
+          const audioBuf = await this.ctx.decodeAudioData(arr.slice(0));
+          this.sampleBuffers.set(key, audioBuf);
+        } else {
+          this._pendingArrayBuffers.set(key, arr);
+        }
+        loadedKeys.push(key);
+      } catch {
+        // skip unsupported file
+      }
+    }
+    return loadedKeys;
+  }
+
+  getLoadedSampleKeys() {
+    return Array.from(
+      new Set([...this.sampleBuffers.keys(), ...this._pendingArrayBuffers.keys()])
+    ).sort();
+  }
+
+  hasSample(key, fallbackKeys = []) {
+    const candidates = [key, ...fallbackKeys].map((k) => String(k || '').toLowerCase());
+    return candidates.some((k) => k && this.sampleBuffers.has(k));
+  }
+
+  /**
+   * 登録済みサンプリング音源を再生（見つからない場合は { played: false } を返す）
+   */
+  playSample(
+    key,
+    { bus = 'master', loop = false, gain = 1.0, fallbackKeys = [], exclusiveVoice = false } = {}
+  ) {
+    if (!this.isInitialized || !this.ctx || this.isMuted) return { played: false };
+    if (this.isTimeStopped && bus !== 'ui') return { played: false };
+
+    const candidates = [key, ...fallbackKeys].map((k) => String(k || '').toLowerCase());
+    let buf = null;
+    let matchedKey = null;
+    for (const k of candidates) {
+      if (k && this.sampleBuffers.has(k)) {
+        buf = this.sampleBuffers.get(k);
+        matchedKey = k;
+        break;
+      }
+    }
+    if (!buf) return { played: false };
+
+    if (exclusiveVoice && this._activeVoiceStopper) {
+      this._activeVoiceStopper();
+      this._activeVoiceStopper = null;
+    }
+
+    const now = this.ctx.currentTime;
+    const src = this.ctx.createBufferSource();
+    src.buffer = buf;
+    src.loop = Boolean(loop);
+
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(gain, now);
+
+    const dest =
+      bus === 'pa' ? this.paInput : bus === 'ui' ? this.uiSfxGain : this.masterGain;
+    src.connect(g);
+    g.connect(dest);
+    src.start(now);
+
+    let stopped = false;
+    const stop = (fadeSec = 0.04) => {
+      if (stopped || !this.ctx) return;
+      stopped = true;
+      const t = this.ctx.currentTime;
+      try {
+        g.gain.cancelScheduledValues(t);
+        g.gain.setValueAtTime(g.gain.value, t);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + Math.max(0.01, fadeSec));
+        src.stop(t + Math.max(0.02, fadeSec + 0.02));
+      } catch {
+        // already stopped
+      }
+    };
+
+    if (exclusiveVoice) {
+      this._activeVoiceStopper = stop;
+      src.onended = () => {
+        if (this._activeVoiceStopper === stop) this._activeVoiceStopper = null;
+      };
+    }
+
+    return { played: true, key: matchedKey, duration: buf.duration, stop };
+  }
+
+  stopVoiceSamples() {
+    if (this._activeVoiceStopper) {
+      this._activeVoiceStopper(0.03);
+      this._activeVoiceStopper = null;
+    }
   }
 
   _syncMasterGain() {
     if (!this.ctx) return;
     const now = this.ctx.currentTime;
     if (this.masterGain) {
-      const target = this.isMuted || this.isTimeStopped ? 0.0 : 0.84;
+      const target = this.isMuted || this.isTimeStopped ? 0.0 : 0.86;
       this.masterGain.gain.setTargetAtTime(target, now, this.isTimeStopped ? 0.08 : 0.06);
     }
     if (this.uiSfxGain) {
-      this.uiSfxGain.gain.setTargetAtTime(this.isMuted ? 0.0 : 0.90, now, 0.04);
+      this.uiSfxGain.gain.setTargetAtTime(this.isMuted ? 0.0 : 0.92, now, 0.04);
     }
   }
 
   setMuted(muted) {
     this.isMuted = muted;
+    if (muted) {
+      this.setEbBuzzerActive(false);
+    }
     this._syncMasterGain();
   }
 
@@ -89,7 +259,9 @@ export class TrainSoundEngine {
     this.isTimeStopped = stopped;
     if (stopped) {
       this.stopDepartureMelody();
+      this.stopVoiceSamples();
       this.setAtsChimeActive(false);
+      this.setEbBuzzerActive(false);
     }
     this._syncMasterGain();
     this.playTimeStopEffect(stopped);
@@ -101,7 +273,6 @@ export class TrainSoundEngine {
 
   _setupStationPAChain() {
     const sr = this.ctx.sampleRate;
-    // 1.35秒の駅ホーム上屋リバーブ・インパルス応答を生成
     const irLen = Math.floor(sr * 1.35);
     const irBuf = this.ctx.createBuffer(2, irLen, sr);
     for (let ch = 0; ch < 2; ch++) {
@@ -109,7 +280,6 @@ export class TrainSoundEngine {
       for (let i = 0; i < irLen; i++) {
         const t = i / sr;
         const env = Math.exp(-t * 3.8) * (i < 420 ? i / 420 : 1.0);
-        // 初期反射（屋根・反対側ホーム壁）をわずかに強調
         const early =
           i === Math.floor(sr * 0.022) || i === Math.floor(sr * 0.047) || i === Math.floor(sr * 0.083)
             ? 0.55
@@ -121,23 +291,22 @@ export class TrainSoundEngine {
     this.paInput = this.ctx.createGain();
     this.paInput.gain.value = 1.0;
 
-    // 駅トランペットスピーカー特有の帯域制限（中域に芯があり高域がわずかに抜ける）
     const hp = this.ctx.createBiquadFilter();
     hp.type = 'highpass';
-    hp.frequency.value = 380;
+    hp.frequency.value = 340;
     const lp = this.ctx.createBiquadFilter();
     lp.type = 'lowpass';
-    lp.frequency.value = 4600;
+    lp.frequency.value = 5200;
     const midPeak = this.ctx.createBiquadFilter();
     midPeak.type = 'peaking';
     midPeak.frequency.value = 1650;
-    midPeak.Q.value = 1.4;
-    midPeak.gain.value = 4.2;
+    midPeak.Q.value = 1.25;
+    midPeak.gain.value = 3.5;
 
     const dryGain = this.ctx.createGain();
-    dryGain.gain.value = 0.62;
+    dryGain.gain.value = 0.68;
     const wetGain = this.ctx.createGain();
-    wetGain.gain.value = 0.48;
+    wetGain.gain.value = 0.44;
 
     const conv = this.ctx.createConvolver();
     conv.buffer = irBuf;
@@ -195,6 +364,21 @@ export class TrainSoundEngine {
     this.rollingGain.connect(this.masterGain);
     this.rollingSource.start(now);
 
+    // 1B. ロングレール (CWR) 特有の「シャー…」連続レール頭頂面摺動音
+    this.cwrSource = this.ctx.createBufferSource();
+    this.cwrSource.buffer = this._noiseBuffer;
+    this.cwrSource.loop = true;
+    this.cwrFilter = this.ctx.createBiquadFilter();
+    this.cwrFilter.type = 'bandpass';
+    this.cwrFilter.frequency.value = 3100;
+    this.cwrFilter.Q.value = 2.1;
+    this.cwrGain = this.ctx.createGain();
+    this.cwrGain.gain.value = 0.0;
+    this.cwrSource.connect(this.cwrFilter);
+    this.cwrFilter.connect(this.cwrGain);
+    this.cwrGain.connect(this.masterGain);
+    this.cwrSource.start(now, 0.35);
+
     // 2. 隅田川橋梁（鋼トラス橋）通過時の「ゴォォォ」低中域鉄骨共鳴音
     this.bridgeSource = this.ctx.createBufferSource();
     this.bridgeSource.buffer = this._noiseBuffer;
@@ -217,7 +401,6 @@ export class TrainSoundEngine {
     this.vvvfBus = this.ctx.createGain();
     this.vvvfBus.gain.value = 0.0;
 
-    // 車体床下からの伝搬を再現するレゾナントフィルター
     this.vvvfFormant = this.ctx.createBiquadFilter();
     this.vvvfFormant.type = 'bandpass';
     this.vvvfFormant.frequency.value = 1050;
@@ -225,7 +408,6 @@ export class TrainSoundEngine {
     this.vvvfBus.connect(this.vvvfFormant);
     this.vvvfFormant.connect(this.masterGain);
 
-    // 主非同期キャリア (fc)
     this.vvvfCarrierOsc = this.ctx.createOscillator();
     this.vvvfCarrierOsc.type = 'sine';
     this.vvvfCarrierOsc.frequency.value = 920;
@@ -234,7 +416,6 @@ export class TrainSoundEngine {
     this.vvvfCarrierOsc.connect(this.vvvfCarrierGain);
     this.vvvfCarrierGain.connect(this.vvvfBus);
 
-    // 上側PWM側帯波 (fc + 2*fm)
     this.vvvfSideUpOsc = this.ctx.createOscillator();
     this.vvvfSideUpOsc.type = 'sine';
     this.vvvfSideUpOsc.frequency.value = 960;
@@ -243,7 +424,6 @@ export class TrainSoundEngine {
     this.vvvfSideUpOsc.connect(this.vvvfSideUpGain);
     this.vvvfSideUpGain.connect(this.vvvfBus);
 
-    // 下側PWM側帯波 (fc - 2*fm)
     this.vvvfSideDnOsc = this.ctx.createOscillator();
     this.vvvfSideDnOsc.type = 'sine';
     this.vvvfSideDnOsc.frequency.value = 880;
@@ -252,7 +432,6 @@ export class TrainSoundEngine {
     this.vvvfSideDnOsc.connect(this.vvvfSideDnGain);
     this.vvvfSideDnGain.connect(this.vvvfBus);
 
-    // 発車直後の日立IGBT特有の繊細な2倍キャリア倍音（澄んだ「ヒュイィィーン」成分）
     this.vvvfHarmOsc = this.ctx.createOscillator();
     this.vvvfHarmOsc.type = 'triangle';
     this.vvvfHarmOsc.frequency.value = 1840;
@@ -261,7 +440,6 @@ export class TrainSoundEngine {
     this.vvvfHarmOsc.connect(this.vvvfHarmGain);
     this.vvvfHarmGain.connect(this.vvvfBus);
 
-    // 主電動機（誘導電動機）基本波うなり音
     this.motorBaseOsc = this.ctx.createOscillator();
     this.motorBaseOsc.type = 'triangle';
     this.motorBaseOsc.frequency.value = 60;
@@ -274,7 +452,6 @@ export class TrainSoundEngine {
     this.motorBaseFilter.connect(this.motorBaseGain);
     this.motorBaseGain.connect(this.masterGain);
 
-    // 平行カルダン駆動 歯車噛み合い音（中高速域の「フォォォォン」）
     this.gearHarmonicOsc = this.ctx.createOscillator();
     this.gearHarmonicOsc.type = 'sawtooth';
     this.gearHarmonicOsc.frequency.value = 180;
@@ -295,7 +472,7 @@ export class TrainSoundEngine {
     this.motorBaseOsc.start(now);
     this.gearHarmonicOsc.start(now);
 
-    // 4. 急カーブ（日暮里〜三河島 R300）でのフランジきしみ音（2音レゾナンス）
+    // 4. 急カーブ（日暮里〜三河島 R300）でのフランジきしみ音
     this.flangeOsc = this.ctx.createOscillator();
     this.flangeOsc.type = 'sine';
     this.flangeOsc.frequency.value = 2680;
@@ -305,7 +482,7 @@ export class TrainSoundEngine {
     this.flangeGain.connect(this.masterGain);
     this.flangeOsc.start(now);
 
-    // 5. 運転室内の微かな空調ブロワー＋SIV補助電源の静かな環境音（停車時のリアルな空気感）
+    // 5. 運転室内の空調ブロワー＋SIV補助電源の定常環境音
     this.hvacSource = this.ctx.createBufferSource();
     this.hvacSource.buffer = this._noiseBuffer;
     this.hvacSource.loop = true;
@@ -319,7 +496,7 @@ export class TrainSoundEngine {
     hvacGain.connect(this.masterGain);
     this.hvacSource.start(now);
 
-    // 6. 雨天時の運転室屋根・ガラス雨音 ＆ 濡れたレールの水しぶき転動シャー音
+    // 6. 雨天時の運転室屋根・ガラス雨音 ＆ 濡れレールの水しぶき転動音
     this.rainSource = this.ctx.createBufferSource();
     this.rainSource.buffer = this._noiseBuffer;
     this.rainSource.loop = true;
@@ -334,7 +511,7 @@ export class TrainSoundEngine {
     this.rainGain.connect(this.masterGain);
     this.rainSource.start(now, 0.7);
 
-    // 7. 停止寸前（14 km/h → 0 km/h）の合成制輪子・踏面ブレーキ摩擦音（「シュー…ギュッ」）
+    // 7. 停止寸前（14 km/h → 0 km/h）の合成制輪子・踏面ブレーキ摩擦音
     this.shoeSource = this.ctx.createBufferSource();
     this.shoeSource.buffer = this._noiseBuffer;
     this.shoeSource.loop = true;
@@ -349,7 +526,7 @@ export class TrainSoundEngine {
     this.shoeGain.connect(this.masterGain);
     this.shoeSource.start(now, 1.3);
 
-    // 8. クハE531床下 電動空気圧縮機（CP）動作音（MR元空気溜め圧力低下時に「ブォォォン…」自動稼働！）
+    // 8. クハE531床下 電動空気圧縮機（CP）動作音
     this._cpRunning = false;
     this.cpOsc = this.ctx.createOscillator();
     this.cpOsc.type = 'sawtooth';
@@ -363,20 +540,63 @@ export class TrainSoundEngine {
     cpLp.connect(this.cpGain);
     this.cpGain.connect(this.masterGain);
     this.cpOsc.start(now);
+
+    // 9. 上り対向列車 通過中ずっと続く連続風圧うねり＆台車通過轟音！（1号車〜10号車通過完了まで持続）
+    this.passingWindSource = this.ctx.createBufferSource();
+    this.passingWindSource.buffer = this._noiseBuffer;
+    this.passingWindSource.loop = true;
+    this.passingWindFilter = this.ctx.createBiquadFilter();
+    this.passingWindFilter.type = 'bandpass';
+    this.passingWindFilter.frequency.value = 340;
+    this.passingWindFilter.Q.value = 0.9;
+    this.passingWindGain = this.ctx.createGain();
+    this.passingWindGain.gain.value = 0.0;
+    this.passingWindSource.connect(this.passingWindFilter);
+    this.passingWindFilter.connect(this.passingWindGain);
+    this.passingWindGain.connect(this.masterGain);
+    this.passingWindSource.start(now, 1.8);
+
+    this.passingBogieOsc = this.ctx.createOscillator();
+    this.passingBogieOsc.type = 'triangle';
+    this.passingBogieOsc.frequency.value = 92;
+    const passBogieLp = this.ctx.createBiquadFilter();
+    passBogieLp.type = 'lowpass';
+    passBogieLp.frequency.value = 240;
+    this.passingBogieGain = this.ctx.createGain();
+    this.passingBogieGain.gain.value = 0.0;
+    this.passingBogieOsc.connect(passBogieLp);
+    passBogieLp.connect(this.passingBogieGain);
+    this.passingBogieGain.connect(this.masterGain);
+    this.passingBogieOsc.start(now);
   }
 
   /**
-   * 毎フレーム車両速度・モータートルク・軌道区間・空気圧と同期して連続音を更新
+   * 毎フレーム車両速度・モータートルク・軌道区間・空気圧・対向列車通過状態と同期して連続音を更新
    */
-  update({ speedKmh, motorEffort, zoneType, curvature, bcPressure = 0, mrPressure = 850 }) {
+  update({
+    speedKmh,
+    motorEffort,
+    zoneType,
+    curvature,
+    bcPressure = 0,
+    mrPressure = 850,
+    passingTrain = null,
+  }) {
     if (!this.isInitialized || !this.ctx) return;
     const now = this.ctx.currentTime;
     const speedNorm = Math.min(1.0, speedKmh / 100);
 
-    // 1. 転動ノイズ
+    // 1. 転動ノイズ ＋ ロングレール連続摺動シャー音
     const rollVol = Math.pow(speedNorm, 1.32) * 0.24;
     this.rollingGain.gain.setTargetAtTime(rollVol, now, 0.06);
     this.rollingFilter.frequency.setTargetAtTime(100 + speedKmh * 3.6, now, 0.08);
+
+    if (this.cwrGain && this.cwrFilter) {
+      const isCwrZone = zoneType !== 'turnout' && zoneType !== 'sharp_curve' && zoneType !== 'truss_bridge';
+      const cwrVol = isCwrZone && speedKmh > 8 ? Math.pow(speedNorm, 1.15) * 0.022 : 0.004 * speedNorm;
+      this.cwrGain.gain.setTargetAtTime(cwrVol, now, 0.08);
+      this.cwrFilter.frequency.setTargetAtTime(2400 + speedKmh * 18, now, 0.08);
+    }
 
     // 2. 隅田川トラス鉄橋の共鳴轟音
     const isBridge = zoneType === 'truss_bridge';
@@ -384,7 +604,7 @@ export class TrainSoundEngine {
     this.bridgeGain.gain.setTargetAtTime(bridgeTarget, now, 0.12);
     this.bridgeFilter.frequency.setTargetAtTime(190 + speedKmh * 2.1, now, 0.1);
 
-    // 3. E531系 日立2レベル IGBT-VVVF（力行 & 純電気回生ブレーキ両対応！）
+    // 3. E531系 日立2レベル IGBT-VVVF（力行 & 純電気回生ブレーキ両対応）
     const absEffort = Math.abs(motorEffort);
     const isBraking = motorEffort < -0.02;
     const activeElectric = absEffort > 0.03 && (isBraking ? speedKmh > 3.5 : speedKmh > 0.25);
@@ -491,7 +711,7 @@ export class TrainSoundEngine {
       this.rainFilter.frequency.setTargetAtTime(1650 + speedKmh * 14, now, 0.15);
     }
 
-    // 6. 低速停止寸前の空気ブレーキ制輪子摩擦音（純電気ブレーキ失効域 0.15〜14 km/h）
+    // 6. 低速停止寸前の空気ブレーキ制輪子摩擦音
     if (this.shoeGain && this.shoeFilter) {
       let shoeVol = 0.0;
       if (speedKmh > 0.12 && speedKmh < 14.5 && bcPressure > 42) {
@@ -503,40 +723,129 @@ export class TrainSoundEngine {
       this.shoeFilter.frequency.setTargetAtTime(1850 + speedKmh * 65, now, 0.06);
     }
 
-    // 7. 床下CP（電動空気圧縮機）ヒステリシス自動稼働音（805 kPa未満でON → 875 kPa回復でOFF）
+    // 7. 床下CP（電動空気圧縮機）ヒステリシス自動稼働音
     if (this.cpGain) {
       if (!this._cpRunning && mrPressure < 805) this._cpRunning = true;
       else if (this._cpRunning && mrPressure >= 875) this._cpRunning = false;
       this.cpGain.gain.setTargetAtTime(this._cpRunning ? 0.022 : 0.0, now, 0.22);
     }
+
+    // 8. 上り対向列車 すれ違い中ずっと持続する連続風圧・連結幌パルス・台車轟音！
+    if (this.passingWindGain && this.passingBogieGain) {
+      const pInt = passingTrain && passingTrain.intensity ? passingTrain.intensity : 0;
+      if (pInt > 0.005) {
+        const relNorm = Math.min(1.35, Math.max(0.35, (passingTrain.relSpeedKmh || 110) / 140));
+        const pulse = passingTrain.carPulse ?? 0.5;
+        // 20mごとの車両幌通過による風圧脈動（「ゴォォ・ボッ・ボッ・ボッ…」）
+        const windVol = pInt * relNorm * (0.125 + 0.075 * pulse);
+        const windFreq = 230 + relNorm * 210 + pulse * 140;
+        this.passingWindFilter.frequency.setTargetAtTime(windFreq, now, 0.03);
+        this.passingWindGain.gain.setTargetAtTime(windVol, now, 0.035);
+
+        this.passingBogieOsc.frequency.setTargetAtTime(78 + relNorm * 46 + pulse * 10, now, 0.04);
+        this.passingBogieGain.gain.setTargetAtTime(pInt * relNorm * (0.065 + 0.035 * pulse), now, 0.04);
+      } else {
+        this.passingWindGain.gain.setTargetAtTime(0.0, now, 0.08);
+        this.passingBogieGain.gain.setTargetAtTime(0.0, now, 0.08);
+      }
+    }
   }
 
   /**
-   * 運転台トグルスイッチ・ロータリースイッチ操作音（「パチッ」）
+   * EB装置（緊急列車防護装置）60秒無操作時の運転台警報ブザー（連続「ピーーッ！」）
    */
-  playSwitchClick() {
-    if (!this.isInitialized || !this.ctx || this.isMuted) return;
+  setEbBuzzerActive(active) {
+    const next = Boolean(active) && !this.isMuted && !this.isTimeStopped;
+    if (this.isEbBuzzerActive === next) return;
+    this.isEbBuzzerActive = next;
+
+    if (this._ebOscNodes) {
+      for (const stopFn of this._ebOscNodes) {
+        try {
+          stopFn();
+        } catch {
+          // ignore
+        }
+      }
+      this._ebOscNodes = null;
+    }
+
+    if (!next || !this.isInitialized || !this.ctx) return;
+
+    // カスタム音源 eb_buzzer が配置されていれば優先再生
+    const sampled = this.playSample('eb_buzzer', { bus: 'ui', loop: true, gain: 0.85 });
+    if (sampled.played) {
+      this._ebOscNodes = [sampled.stop];
+      return;
+    }
+
+    // JR東日本 運転台EB警報電子ブザー合成（約2,080Hz基音＋倍音＋微細な断続変調）
     const now = this.ctx.currentTime;
-    const src = this.ctx.createBufferSource();
-    src.buffer = this._noiseBuffer;
+    const o1 = this.ctx.createOscillator();
+    o1.type = 'square';
+    o1.frequency.value = 2080;
+
+    const o2 = this.ctx.createOscillator();
+    o2.type = 'sine';
+    o2.frequency.value = 2496;
+
     const bp = this.ctx.createBiquadFilter();
     bp.type = 'bandpass';
-    bp.frequency.value = 3100;
-    bp.Q.value = 3.2;
+    bp.frequency.value = 2250;
+    bp.Q.value = 2.6;
+
     const g = this.ctx.createGain();
-    g.gain.setValueAtTime(0.11, now);
-    g.gain.exponentialRampToValueAtTime(0.0008, now + 0.012);
-    src.connect(bp);
+    g.gain.setValueAtTime(0.001, now);
+    g.gain.linearRampToValueAtTime(0.16, now + 0.025);
+
+    o1.connect(bp);
+    o2.connect(bp);
     bp.connect(g);
     g.connect(this.uiSfxGain);
-    src.start(now, Math.random() * 0.5, 0.02);
+    o1.start(now);
+    o2.start(now);
+
+    this._ebOscNodes = [
+      () => {
+        const t = this.ctx.currentTime;
+        g.gain.cancelScheduledValues(t);
+        g.gain.setTargetAtTime(0.0001, t, 0.015);
+        o1.stop(t + 0.05);
+        o2.stop(t + 0.05);
+      },
+    ];
   }
 
   /**
-   * JR東日本 ATS-P「キンコン・キンコン」2音電磁チャイム（単発または連続鳴動）
+   * 運転台の黄色い「EBリセット」押しボタン操作音（「カチッ・コン」）
+   */
+  playEbResetSwitch() {
+    if (!this.isInitialized || !this.ctx || this.isMuted) return;
+    const sampled = this.playSample('eb_reset', { bus: 'ui', gain: 0.85 });
+    if (sampled.played) return;
+
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(1420, now);
+    osc.frequency.exponentialRampToValueAtTime(220, now + 0.028);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.14, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.032);
+    osc.connect(g);
+    g.connect(this.uiSfxGain);
+    osc.start(now);
+    osc.stop(now + 0.036);
+  }
+
+  /**
+   * JR東日本 ATS-P「キンコン・キンコン」2音電磁チャイム
    */
   playAtsChimePair() {
     if (!this.isInitialized || !this.ctx || this.isMuted || this.isTimeStopped) return;
+    const sampled = this.playSample('ats_chime', { bus: 'master', gain: 0.9 });
+    if (sampled.played) return;
+
     const now = this.ctx.currentTime;
     const strikeBell = (baseFreq, t0, dur) => {
       for (const [ratio, amp, dec] of [
@@ -557,7 +866,7 @@ export class TrainSoundEngine {
         osc.stop(t0 + dec + 0.02);
       }
     };
-    strikeBell(812, now, 0.22);        // 「キン」(G#5)
+    strikeBell(812, now, 0.22);           // 「キン」(G#5)
     strikeBell(659.25, now + 0.19, 0.28); // 「コン」(E5)
   }
 
@@ -579,71 +888,96 @@ export class TrainSoundEngine {
   }
 
   /**
-   * 車掌→運転士 出発合図ブザー（「ツー・ツー」）
+   * 車掌→運転士 出発合図ブザー（「ツー・ツー」— 約420Hz・大音量で運転室内に響く実車電磁ブザー！）
    */
   playConductorBuzzer() {
     if (!this.isInitialized || !this.ctx || this.isMuted || this.isTimeStopped) return;
+    const sampled = this.playSample('buzzer', { bus: 'master', gain: 1.0 });
+    if (sampled.played) return;
+
     const now = this.ctx.currentTime;
     for (const [off, dur] of [
-      [0.0, 0.18],
-      [0.30, 0.25],
+      [0.0, 0.22],
+      [0.34, 0.30],
     ]) {
       const t0 = now + off;
-      const osc = this.ctx.createOscillator();
-      osc.type = 'sawtooth';
-      osc.frequency.setValueAtTime(935, t0);
+
+      // 420Hz 基音（のこぎり波＋矩形波の重厚な電磁ブザー倍音）
+      const oscSaw = this.ctx.createOscillator();
+      oscSaw.type = 'sawtooth';
+      oscSaw.frequency.setValueAtTime(420, t0);
+
+      const oscSq = this.ctx.createOscillator();
+      oscSq.type = 'square';
+      oscSq.frequency.setValueAtTime(421.5, t0);
+      const sqMix = this.ctx.createGain();
+      sqMix.gain.value = 0.45;
+
+      // 電磁振動板の微細な唸り変調 (55Hz)
+      const lfo = this.ctx.createOscillator();
+      lfo.type = 'sine';
+      lfo.frequency.value = 55;
+      const lfoGain = this.ctx.createGain();
+      lfoGain.gain.value = 8.5;
+      lfo.connect(lfoGain);
+      lfoGain.connect(oscSaw.frequency);
+
       const bp = this.ctx.createBiquadFilter();
       bp.type = 'bandpass';
-      bp.frequency.value = 1150;
-      bp.Q.value = 2.2;
+      bp.frequency.value = 560;
+      bp.Q.value = 1.15;
+
+      const lp = this.ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = 2350;
+
       const g = this.ctx.createGain();
-      g.gain.setValueAtTime(0.001, t0);
-      g.gain.linearRampToValueAtTime(0.068, t0 + 0.012);
-      g.gain.setValueAtTime(0.062, t0 + dur - 0.015);
+      g.gain.setValueAtTime(0.002, t0);
+      g.gain.linearRampToValueAtTime(0.28, t0 + 0.010);
+      g.gain.setValueAtTime(0.265, t0 + dur - 0.016);
       g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
-      osc.connect(bp);
-      bp.connect(g);
+
+      oscSaw.connect(bp);
+      oscSq.connect(sqMix);
+      sqMix.connect(bp);
+      bp.connect(lp);
+      lp.connect(g);
       g.connect(this.masterGain);
-      osc.start(t0);
-      osc.stop(t0 + dur + 0.02);
+
+      oscSaw.start(t0);
+      oscSq.start(t0);
+      lfo.start(t0);
+      oscSaw.stop(t0 + dur + 0.02);
+      oscSq.stop(t0 + dur + 0.02);
+      lfo.stop(t0 + dur + 0.02);
     }
   }
 
   /**
-   * 車内自動放送 4音チャイム（E531/E231系 案内チャイム）
+   * 車内自動放送（日英一体型サンプリング音源）再生
    */
-  playOnboardChime() {
-    if (!this.isInitialized || !this.ctx || this.isMuted || this.isTimeStopped) return;
-    const now = this.ctx.currentTime;
-    const notes = [783.99, 1046.50, 1318.51, 1567.98]; // G5 - C6 - E6 - G6
-    notes.forEach((freq, i) => {
-      const t0 = now + i * 0.14;
-      const dur = i === 3 ? 0.45 : 0.24;
-      const osc = this.ctx.createOscillator();
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(freq, t0);
-      const over = this.ctx.createOscillator();
-      over.type = 'triangle';
-      over.frequency.setValueAtTime(freq * 2, t0);
-      const og = this.ctx.createGain();
-      og.gain.value = 0.18;
-      const g = this.ctx.createGain();
-      g.gain.setValueAtTime(0.0008, t0);
-      g.gain.linearRampToValueAtTime(0.072, t0 + 0.01);
-      g.gain.exponentialRampToValueAtTime(0.0008, t0 + dur);
-      osc.connect(g);
-      over.connect(og);
-      og.connect(g);
-      g.connect(this.masterGain);
-      osc.start(t0);
-      over.start(t0);
-      osc.stop(t0 + dur + 0.03);
-      over.stop(t0 + dur + 0.03);
+  playOnboardAnnouncement(sampleKey) {
+    return this.playSample(sampleKey, {
+      bus: 'master',
+      gain: 0.96,
+      exclusiveVoice: true,
     });
   }
 
   /**
-   * ワイパーブレード反転・摺動音（控えめなゴム水切り音「シュッ…」）
+   * 駅ホーム ATOS 戸閉放送（サンプリング音源 — 駅ホームPA残響チェーン経由）再生
+   */
+  playPlatformAtos(stationId) {
+    return this.playSample(`atos_close_${stationId}`, {
+      bus: 'pa',
+      gain: 0.95,
+      fallbackKeys: ['atos_close'],
+      exclusiveVoice: true,
+    });
+  }
+
+  /**
+   * ワイパーブレード反転・摺動音
    */
   playWiperBlade(dir = 1) {
     if (!this.isInitialized || !this.ctx || this.isMuted || this.isTimeStopped) return;
@@ -666,15 +1000,107 @@ export class TrainSoundEngine {
   }
 
   /**
-   * 車輪がレール継目を通過した瞬間の「ガタン・ゴトン」単発インパルス合成
+   * 軌道種別別のジョイント・分岐器クロッシング・伸縮継目通過音合成
+   *   jointKind: 'cwr_weld' | 'expansion_ej' | 'standard_25m' | 'bridge_deck' | 'turnout_frog'
    */
-  playRailJoint({ axle = 1, zoneType = 'viaduct_ballast', speedKmh = 40 }) {
+  playRailJoint({ axle = 1, zoneType = 'viaduct_ballast', jointKind = 'standard_25m', speedKmh = 40 }) {
     if (!this.isInitialized || !this.ctx || this.isMuted || this.isTimeStopped) return;
     const now = this.ctx.currentTime;
-    const speedScale = Math.min(1.15, Math.max(0.2, speedKmh / 65));
-    const isBridge = zoneType === 'truss_bridge';
-    const isTurnout = zoneType === 'turnout';
+    const speedScale = Math.min(1.18, Math.max(0.2, speedKmh / 65));
 
+    if (jointKind === 'cwr_weld') {
+      // ロングレール溶接部・閉塞絶縁継目 (IJ)：控えめでシャープな「タタン」
+      const osc = this.ctx.createOscillator();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(axle === 1 ? 132 : 108, now);
+      osc.frequency.exponentialRampToValueAtTime(48, now + 0.055);
+      const g = this.ctx.createGain();
+      const vol = 0.085 * speedScale;
+      g.gain.setValueAtTime(vol, now);
+      g.gain.exponentialRampToValueAtTime(0.001, now + 0.06);
+      osc.connect(g);
+      g.connect(this.masterGain);
+      osc.start(now);
+      osc.stop(now + 0.065);
+
+      const tick = this.ctx.createBufferSource();
+      tick.buffer = this._noiseBuffer;
+      const bp = this.ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.value = 1480;
+      bp.Q.value = 2.8;
+      const tg = this.ctx.createGain();
+      tg.gain.setValueAtTime(vol * 0.65, now);
+      tg.gain.exponentialRampToValueAtTime(0.001, now + 0.032);
+      tick.connect(bp);
+      bp.connect(tg);
+      tg.connect(this.masterGain);
+      tick.start(now, Math.random() * 1.4, 0.05);
+      return;
+    }
+
+    if (jointKind === 'expansion_ej') {
+      // 橋梁前後の伸縮継目 (EJ)：トング状摺動レールの「カシャン・タタン」金属2連音
+      for (const [dt, f0, amp] of [
+        [0.0, 1680, 0.20],
+        [0.028, 1220, 0.15],
+      ]) {
+        const t0 = now + dt;
+        const src = this.ctx.createBufferSource();
+        src.buffer = this._noiseBuffer;
+        const bp = this.ctx.createBiquadFilter();
+        bp.type = 'bandpass';
+        bp.frequency.value = f0;
+        bp.Q.value = 3.4;
+        const g = this.ctx.createGain();
+        g.gain.setValueAtTime(amp * speedScale, t0);
+        g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.055);
+        src.connect(bp);
+        bp.connect(g);
+        g.connect(this.masterGain);
+        src.start(t0, Math.random() * 1.2, 0.07);
+      }
+      return;
+    }
+
+    if (jointKind === 'turnout_frog') {
+      // 片渡り・両渡り分岐器（ポイント・クロッシング欠線部）：重厚な「ガガタン・ダダン！」多重鋼鉄打撃！
+      const fireHit = (dt, pitch, thudAmp, metalFreq) => {
+        const t0 = now + dt;
+        const thud = this.ctx.createOscillator();
+        thud.type = 'triangle';
+        thud.frequency.setValueAtTime(pitch, t0);
+        thud.frequency.exponentialRampToValueAtTime(30, t0 + 0.115);
+        const tg = this.ctx.createGain();
+        tg.gain.setValueAtTime(thudAmp * speedScale, t0);
+        tg.gain.exponentialRampToValueAtTime(0.001, t0 + 0.125);
+        thud.connect(tg);
+        tg.connect(this.masterGain);
+        thud.start(t0);
+        thud.stop(t0 + 0.135);
+
+        const clank = this.ctx.createBufferSource();
+        clank.buffer = this._noiseBuffer;
+        const bp = this.ctx.createBiquadFilter();
+        bp.type = 'bandpass';
+        bp.frequency.value = metalFreq;
+        bp.Q.value = 2.4;
+        const cg = this.ctx.createGain();
+        cg.gain.setValueAtTime(thudAmp * 0.85 * speedScale, t0);
+        cg.gain.exponentialRampToValueAtTime(0.001, t0 + 0.065);
+        clank.connect(bp);
+        bp.connect(cg);
+        cg.connect(this.masterGain);
+        clank.start(t0, Math.random() * 1.3, 0.09);
+      };
+      // ガードレール接触 → クロッシング欠線部本打撃の2段衝撃
+      fireHit(0.0, axle === 1 ? 116 : 92, 0.22, 1320);
+      fireHit(0.036, axle === 1 ? 94 : 76, 0.36, 860);
+      return;
+    }
+
+    // 25m 定尺レール継目 ('standard_25m') または 隅田川トラス鉄橋 ('bridge_deck')
+    const isBridge = zoneType === 'truss_bridge' || jointKind === 'bridge_deck';
     const thudOsc = this.ctx.createOscillator();
     thudOsc.type = 'triangle';
     const basePitch = axle === 1 ? 104 : 82;
@@ -682,7 +1108,7 @@ export class TrainSoundEngine {
     thudOsc.frequency.exponentialRampToValueAtTime(34, now + (isBridge ? 0.135 : 0.088));
 
     const thudGain = this.ctx.createGain();
-    const vol = (isTurnout ? 0.32 : isBridge ? 0.35 : 0.23) * speedScale;
+    const vol = (isBridge ? 0.35 : 0.24) * speedScale;
     thudGain.gain.setValueAtTime(vol, now);
     thudGain.gain.exponentialRampToValueAtTime(0.001, now + (isBridge ? 0.155 : 0.095));
 
@@ -695,7 +1121,7 @@ export class TrainSoundEngine {
     clickSrc.buffer = this._noiseBuffer;
     const clickFilter = this.ctx.createBiquadFilter();
     clickFilter.type = 'bandpass';
-    clickFilter.frequency.value = isBridge ? 1180 : isTurnout ? 940 : 680;
+    clickFilter.frequency.value = isBridge ? 1180 : 680;
     clickFilter.Q.value = isBridge ? 3.2 : 1.9;
 
     const clickGain = this.ctx.createGain();
@@ -709,102 +1135,19 @@ export class TrainSoundEngine {
   }
 
   /**
-   * 実車ワンハンドルマスコン 機械式カムディテント操作音（「ガチッ」「カコンッ」）
-   *   notchKind: 'normal' | 'neutral' | 'eb'
+   * JR東日本 E531系 警笛（サンプリング音源 `horn` / `horn_elec` 最優先、未配置時のみフォールバック合成）
    */
-  playNotchClick(notchKind = false) {
+  playHorn(kind = 'air') {
     if (!this.isInitialized || !this.ctx || this.isMuted) return;
+    const primaryKey = kind === 'elec' ? 'horn_elec' : 'horn';
+    const sampled = this.playSample(primaryKey, {
+      bus: 'master',
+      gain: 1.0,
+      fallbackKeys: ['horn', 'horn_air', 'horn_elec'],
+    });
+    if (sampled.played) return;
+
     const now = this.ctx.currentTime;
-    const kind =
-      notchKind === true ? 'neutral' : notchKind === false ? 'normal' : notchKind;
-    const isHeavy = kind === 'neutral' || kind === 'eb';
-    const isEB = kind === 'eb';
-
-    const fireDetent = (t0, gainScale, pitchScale) => {
-      // 1. 金属カムローラーのシャープな接触打撃ノイズ（約8ms）
-      const snapSrc = this.ctx.createBufferSource();
-      snapSrc.buffer = this._noiseBuffer;
-      const snapBp = this.ctx.createBiquadFilter();
-      snapBp.type = 'bandpass';
-      snapBp.frequency.value = 2350 * pitchScale;
-      snapBp.Q.value = 2.8;
-      const snapG = this.ctx.createGain();
-      snapG.gain.setValueAtTime(0.24 * gainScale, t0);
-      snapG.gain.exponentialRampToValueAtTime(0.001, t0 + 0.014);
-      snapSrc.connect(snapBp);
-      snapBp.connect(snapG);
-      snapG.connect(this.uiSfxGain);
-      snapSrc.start(t0, Math.random() * 1.2, 0.025);
-
-      // 2. 運転台コンソール筐体の低中域「コツン・ゴトン」共鳴
-      const bodyOsc = this.ctx.createOscillator();
-      bodyOsc.type = 'triangle';
-      bodyOsc.frequency.setValueAtTime(165 * pitchScale, t0);
-      bodyOsc.frequency.exponentialRampToValueAtTime(58, t0 + 0.032);
-      const bodyG = this.ctx.createGain();
-      bodyG.gain.setValueAtTime(0.18 * gainScale, t0);
-      bodyG.gain.exponentialRampToValueAtTime(0.001, t0 + 0.036);
-      bodyOsc.connect(bodyG);
-      bodyG.connect(this.uiSfxGain);
-      bodyOsc.start(t0);
-      bodyOsc.stop(t0 + 0.04);
-
-      // 3. 鋼製スプリング・ピン着座の極小金属リング
-      const ringOsc = this.ctx.createOscillator();
-      ringOsc.type = 'sine';
-      ringOsc.frequency.setValueAtTime(3650 * pitchScale, t0);
-      const ringG = this.ctx.createGain();
-      ringG.gain.setValueAtTime(0.045 * gainScale, t0);
-      ringG.gain.exponentialRampToValueAtTime(0.0008, t0 + 0.022);
-      ringOsc.connect(ringG);
-      ringG.connect(this.uiSfxGain);
-      ringOsc.start(t0);
-      ringOsc.stop(t0 + 0.026);
-    };
-
-    fireDetent(now, isEB ? 1.45 : isHeavy ? 1.18 : 0.85, isEB ? 0.82 : isHeavy ? 0.92 : 1.04);
-    // Nロック解除・非常位置投入時は2段目の重厚ラッチ音を重ねる
-    if (isHeavy) {
-      fireDetent(now + 0.026, isEB ? 1.25 : 0.78, isEB ? 0.68 : 0.82);
-    }
-  }
-
-  /**
-   * ブレーキ緩解時の空気排気音（「プシューッ」）
-   */
-  playBrakeAirRelease(strength = 0.7) {
-    if (!this.isInitialized || !this.ctx || this.isMuted || this.isTimeStopped) return;
-    const now = this.ctx.currentTime;
-
-    const src = this.ctx.createBufferSource();
-    src.buffer = this._noiseBuffer;
-
-    const filter = this.ctx.createBiquadFilter();
-    filter.type = 'bandpass';
-    filter.frequency.setValueAtTime(2550, now);
-    filter.frequency.exponentialRampToValueAtTime(920, now + 0.52);
-    filter.Q.value = 1.5;
-
-    const g = this.ctx.createGain();
-    const peak = 0.16 * Math.max(0.25, strength);
-    g.gain.setValueAtTime(0.004, now);
-    g.gain.linearRampToValueAtTime(peak, now + 0.035);
-    g.gain.exponentialRampToValueAtTime(0.001, now + 0.56);
-
-    src.connect(filter);
-    filter.connect(g);
-    g.connect(this.masterGain);
-    src.start(now, Math.random() * 0.8, 0.62);
-  }
-
-  /**
-   * JR東日本 E531系 電笛＋空笛タイフォン警笛（ブラスフォルマント＋エアアタック）
-   */
-  playHorn() {
-    if (!this.isInitialized || !this.ctx || this.isMuted) return;
-    const now = this.ctx.currentTime;
-
-    // 空気噴射アタックノイズ
     const airSrc = this.ctx.createBufferSource();
     airSrc.buffer = this._noiseBuffer;
     const airBp = this.ctx.createBiquadFilter();
@@ -820,7 +1163,6 @@ export class TrainSoundEngine {
     airG.connect(this.masterGain);
     airSrc.start(now, 0.2, 0.18);
 
-    // G4 (392Hz) + B4 (493.88Hz) 長三度タイフォン和音（デチューン2重発振で実物の太い共鳴）
     const chord = [392.0, 493.88];
     for (const baseFreq of chord) {
       for (const detune of [-4.5, 4.5]) {
@@ -853,7 +1195,7 @@ export class TrainSoundEngine {
   }
 
   /**
-   * 上り対向列車とのすれ違い風圧音（「ビュワッ！」）
+   * 上り対向列車 先頭同士のすれ違い風圧衝撃音（「ビュワッ！」— この後 update() の連続通過轟音へ繋がる！）
    */
   playPassingTrainWhoosh() {
     if (!this.isInitialized || !this.ctx || this.isMuted || this.isTimeStopped) return;
@@ -881,13 +1223,15 @@ export class TrainSoundEngine {
   }
 
   /**
-   * JR東日本 E531/E231系 リアルドアチャイム（E6-C6 3連ベル倍音）＋ 電気/空気ドア開閉メカ音
+   * ドアチャイム＋扉開閉音（サンプリング音源 `door_open` / `door_close` 最優先、未配置時のみフォールバック合成）
    */
   playDoorChime(opening = true) {
     if (!this.isInitialized || !this.ctx || this.isMuted || this.isTimeStopped) return;
-    const now = this.ctx.currentTime;
+    const sampleKey = opening ? 'door_open' : 'door_close';
+    const sampled = this.playSample(sampleKey, { bus: 'master', gain: 0.95 });
+    if (sampled.played) return;
 
-    // 1. 実車準拠 E6 (1318.51Hz) → C6 (1046.50Hz) 柔らかいベル倍音チャイム（閉扉3連・開扉2連）
+    const now = this.ctx.currentTime;
     const cycles = opening ? 2 : 3;
     const pairStep = 0.52;
     const playBellNote = (freq, t0, dur) => {
@@ -912,11 +1256,10 @@ export class TrainSoundEngine {
 
     for (let c = 0; c < cycles; c++) {
       const base = now + c * pairStep;
-      playBellNote(1318.51, base, 0.26); // E6「ピン」
-      playBellNote(1046.50, base + 0.22, 0.30); // C6「ポン」
+      playBellNote(1318.51, base, 0.26);
+      playBellNote(1046.50, base + 0.22, 0.30);
     }
 
-    // 2. 同期するドア駆動スライド音（「シュゥゥー」＋ 閉扉ラッチ「ドスン・ガチャン」）
     const slideStart = now + (opening ? 0.14 : 0.42);
     const slideDur = opening ? 0.92 : 1.18;
 
@@ -939,7 +1282,6 @@ export class TrainSoundEngine {
     slideG.connect(this.masterGain);
     slideSrc.start(slideStart, 0.35, slideDur + 0.05);
 
-    // 戸当たりクッション着座音（「ゴトン / ドスン」）
     const thumpT = slideStart + slideDur - 0.04;
     const thumpOsc = this.ctx.createOscillator();
     thumpOsc.type = 'triangle';
@@ -955,7 +1297,7 @@ export class TrainSoundEngine {
   }
 
   /**
-   * 駅IDに対応する実在発車メロディ曲名を返す（下り：日暮里→三河島→南千住→北千住）
+   * 駅IDに対応する実在発車メロディ曲名を返す
    */
   getMelodyTitle(stationId = 'nippori') {
     switch (stationId) {
@@ -971,12 +1313,6 @@ export class TrainSoundEngine {
     }
   }
 
-  /**
-   * 駅ホーム天井PAスピーカー残響付き 実在駅発車メロディ再生
-   *   - 日暮里 (4番線)   : 『線路の彼方』（櫻井隆仁 / テイチク FMエレピ＋クリスタルベル）
-   *   - 三河島・南千住   : 『JRE-IKST-013-02』（F#メジャー BPM132 新汎用ビブラフォンベル＋伴奏）
-   *   - 北千住 (1番線)   : 『陽だまり V2』（井出正彦 / ユニペックス オルゴールチェレスタ＋V2温もりパッド）
-   */
   stopDepartureMelody() {
     for (const stopFn of this._melodyStoppers) {
       try {
@@ -989,9 +1325,33 @@ export class TrainSoundEngine {
     this.isMelodyPlaying = false;
   }
 
+  /**
+   * 駅ホーム発車メロディ再生
+   * サンプリング音源（`melody_nippori` / `melody_ikst013_02` / `melody_kitasenju`）が読み込まれていれば
+   * ループ再生＋駅PA残響で実音再生し、未配置の間は内蔵シンセをフォールバック再生！
+   */
   playDepartureMelody(stationId = 'nippori') {
     if (!this.isInitialized || !this.ctx || this.isMuted || this.isTimeStopped) return;
     this.stopDepartureMelody();
+
+    const melodyKeyMap = {
+      nippori: ['melody_nippori', 'senro_no_kanata'],
+      mikawashima: ['melody_ikst013_02', 'melody_mikawashima', 'jre-ikst-013-02'],
+      minamisenju: ['melody_ikst013_02', 'melody_minamisenju', 'jre-ikst-013-02'],
+      kitasenju: ['melody_kitasenju', 'hidamari_v2'],
+    };
+    const keys = melodyKeyMap[stationId] || melodyKeyMap.nippori;
+    const sampled = this.playSample(keys[0], {
+      bus: 'pa',
+      loop: true,
+      gain: 0.92,
+      fallbackKeys: keys.slice(1),
+    });
+    if (sampled.played) {
+      this.isMelodyPlaying = true;
+      this._melodyStoppers.push(() => sampled.stop(0.05));
+      return;
+    }
 
     const now = this.ctx.currentTime + 0.035;
     const mtof = (m) => 440 * Math.pow(2, (m - 69) / 12);

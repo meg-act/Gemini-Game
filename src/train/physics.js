@@ -40,25 +40,56 @@ export class TrainPhysics {
   }
 
   /**
-   * 路線全体のレール継目座標リストを生成（分岐器・急曲線25m定尺・橋梁伸縮継目・高架50mロングレール）
+   * 路線全体のレール継目座標リストを生成
+   *   - turnout_frog : 日暮里・北千住構内の片渡り・両渡り分岐器（トングレール・クロッシング欠線部）
+   *   - expansion_ej : 隅田川橋梁・幹線道路架道橋前後のレール伸縮継目 (EJ)
+   *   - standard_25m : 急曲線（R300三河島大カーブ等）および駅ホーム構内の25m定尺レール継目
+   *   - bridge_deck  : 隅田川トラス鉄橋上の無道床枕木・橋桁継目
+   *   - cwr_weld     : 高架直線・緩曲線区間のロングレール (CWR) 溶接部・閉塞絶縁継目 (IJ: 約180m間隔)
    */
   _generateRailJoints() {
     const joints = [];
+    // 橋梁前後の実在伸縮継目 (EJ) 位置
+    const ejPoints = [1088, 1116, 2166, 2196, 3882, 4068, 4368, 4394];
+    for (const ejD of ejPoints) {
+      joints.push({ d: ejD, zoneType: this.route.getTrackZoneAt(ejD).type, jointKind: 'expansion_ej' });
+    }
+
+    const isStationPlatform = (pos) =>
+      STATIONS.some((st) => pos >= st.platformStart - 10 && pos <= st.platformEnd + 15);
+
     let d = -230;
     while (d < 5490) {
       const zone = this.route.getTrackZoneAt(d);
-      let step = 48.0; // ロングレール溶接継目
+      let step = 180.0;
+      let jointKind = 'cwr_weld';
+
       if (zone.type === 'turnout') {
-        // ポイント・クロッシング部の不規則な継目リズム
-        step = 9.5 + ((Math.abs(Math.round(d)) * 7) % 9);
+        step = 11.0 + ((Math.abs(Math.round(d)) * 7) % 8);
+        jointKind = 'turnout_frog';
       } else if (zone.type === 'sharp_curve') {
-        step = 25.0; // 25m 定尺レール区間
+        step = 25.0;
+        jointKind = 'standard_25m';
       } else if (zone.type === 'truss_bridge') {
-        step = 20.5; // トラス橋桁継目
+        step = 20.5;
+        jointKind = 'bridge_deck';
+      } else if (isStationPlatform(d)) {
+        step = 25.0;
+        jointKind = 'standard_25m';
+      } else {
+        // 高架ロングレール区間（閉塞境界の絶縁継目 IJ・テルミット溶接部のみ）
+        step = 175.0 + ((Math.abs(Math.round(d)) * 13) % 35);
+        jointKind = 'cwr_weld';
       }
+
       d += step;
-      joints.push({ d, zoneType: zone.type });
+      // EJ近傍 (±5m) の重複を避ける
+      if (!ejPoints.some((ej) => Math.abs(ej - d) < 5.0)) {
+        joints.push({ d, zoneType: zone.type, jointKind });
+      }
     }
+
+    joints.sort((a, b) => a.d - b.d);
     return joints;
   }
 
@@ -73,7 +104,32 @@ export class TrainPhysics {
 
   toggleSnowBrake() {
     this.snowBrake = !this.snowBrake;
+    this.notifyDriverActivity();
     return this.snowBrake;
+  }
+
+  /**
+   * 運転士の機器操作通知（マスコン・警笛・ワイパー・前照灯・EBリセット等で60秒EBタイマーをクリア）
+   */
+  notifyDriverActivity() {
+    this.ebTimer = 0;
+    if (this.ebWarningActive || this.ebBrakeActive) {
+      this.ebWarningActive = false;
+      this.ebBrakeActive = false;
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * 運転台「EBリセット」黄色押しボタン操作
+   */
+  resetEbDevice() {
+    const wasActive = this.ebWarningActive || this.ebBrakeActive;
+    this.ebTimer = 0;
+    this.ebWarningActive = false;
+    this.ebBrakeActive = false;
+    return { wasActive };
   }
 
   getScheduledStations() {
@@ -97,12 +153,14 @@ export class TrainPhysics {
     this.atsPatternSpeedKmh = this._computeAtsPatternSpeedKmh(startDistance);
     this.atsPatternApproach = false;
     this.atsBrakeActive = false;
+    this.ebTimer = 0;
+    this.ebWarningActive = false;
+    this.ebBrakeActive = false;
     this.wheelSlip = 0;
 
     this._prevDistance = startDistance;
     this._prevAxle1 = startDistance - 2.1;
     this._prevAxle2 = startDistance - 4.2;
-    this._prevTargetBc = 195;
   }
 
   /**
@@ -144,6 +202,7 @@ export class TrainPhysics {
    * マスコンを手前に引く（制動解除 → 力行側へ +1段）
    */
   pullHandle() {
+    this.notifyDriverActivity();
     if (this.notchIndex < NOTCH_STEPS.length - 1) {
       // 戸開中は N より上（P1〜P5）へ入らない戸閉保安インターロック
       if (this.doorsOpen && this.notchIndex >= NEUTRAL_INDEX) {
@@ -159,6 +218,7 @@ export class TrainPhysics {
    * マスコンを奥へ押す（力行解除 → 制動側へ -1段）
    */
   pushHandle() {
+    this.notifyDriverActivity();
     if (this.notchIndex > 0) {
       this.notchIndex--;
       return { changed: true, notch: this.currentNotch };
@@ -167,6 +227,7 @@ export class TrainPhysics {
   }
 
   setNeutral() {
+    this.notifyDriverActivity();
     if (this.notchIndex !== NEUTRAL_INDEX) {
       this.notchIndex = NEUTRAL_INDEX;
       return { changed: true, notch: this.currentNotch };
@@ -175,6 +236,7 @@ export class TrainPhysics {
   }
 
   applyEmergencyBrake() {
+    this.notifyDriverActivity();
     if (this.notchIndex !== 0) {
       this.notchIndex = 0;
       return { changed: true, notch: this.currentNotch, isEB: true };
@@ -186,6 +248,7 @@ export class TrainPhysics {
    * 駅ホーム停車中のドア開閉トグル
    */
   toggleDoors() {
+    this.notifyDriverActivity();
     if (this.speedKmh > 0.4) return { toggled: false, reason: 'moving' };
     this.doorsOpen = !this.doorsOpen;
     if (this.doorsOpen && this.notchIndex > NEUTRAL_INDEX) {
@@ -200,7 +263,6 @@ export class TrainPhysics {
   getNextScheduledStop() {
     const stops = this.getScheduledStations();
     for (const st of stops) {
-      // 停止目標を +25m 以上過ぎるまではその駅を案内対象とする（日暮里 0m 発車直後は三河島/北千住へ切替）
       if (st.stopDistance === 0 && this.distance > 18) continue;
       if (st.stopDistance === 0 && this.distance <= 18 && this.speedKmh > 6) continue;
       if (this.distance <= st.stopDistance + 25 && st.stopDistance > 0) {
@@ -223,14 +285,35 @@ export class TrainPhysics {
   }
 
   /**
-   * 毎フレーム物理積分・ATS-P照査・雨天粘着・分岐器横揺れ・停止カックン判定
+   * 毎フレーム物理積分・ATS-P照査・EB装置60秒監視・雨天粘着・分岐器横揺れ・停止カックン判定
    */
   update(dt, callbacks = {}) {
     const safeDt = Math.min(dt, 0.05);
-    const notch = this.currentNotch;
     const frame = this.route.getFrameAt(this.distance);
 
-    // 0. ATS-P 連続速度パターン照査
+    // 0A. EB装置（緊急列車防護装置）：走行中60秒無操作で警報ブザー → さらに5秒放置で非常ブレーキ自動投入！
+    if (this.speedKmh > 1.0 && !this.doorsOpen) {
+      this.ebTimer += safeDt;
+      if (this.ebTimer >= 60.0 && !this.ebWarningActive) {
+        this.ebWarningActive = true;
+        if (callbacks.onEbEvent) callbacks.onEbEvent({ type: 'warning_start' });
+      }
+      if (this.ebTimer >= 65.0 && !this.ebBrakeActive) {
+        this.ebBrakeActive = true;
+        this.notchIndex = 0; // EB投入
+        if (callbacks.onEbEvent) callbacks.onEbEvent({ type: 'eb_apply' });
+      }
+    } else if (!this.ebBrakeActive) {
+      if (this.ebWarningActive && callbacks.onEbEvent) {
+        callbacks.onEbEvent({ type: 'reset' });
+      }
+      this.ebTimer = 0;
+      this.ebWarningActive = false;
+    }
+
+    const notch = this.currentNotch;
+
+    // 0B. ATS-P 連続速度パターン照査
     this.atsPatternSpeedKmh = this._computeAtsPatternSpeedKmh(this.distance);
     const prevApproach = this.atsPatternApproach;
     this.atsPatternApproach =
@@ -250,19 +333,14 @@ export class TrainPhysics {
       callbacks.onAtsEvent({ type: 'pattern_approach' });
     }
 
-    // 1. 空気ブレーキ圧 (BC) の一次遅れ応答 & 耐雪ブレーキ最低圧保持 & ATS-P常用最大指令
+    // 1. 電気指令式ブレーキ圧 (BC) の一次遅れ応答 & 耐雪ブレーキ最低圧保持 & ATS-P / EB装置指令
     const snowHoldKpa = this.snowBrake && this.speedKmh > 4.0 ? 26 : 0;
     const atsCommandKpa = this.atsBrakeActive ? 355 : 0;
-    const targetBc = Math.max(notch.targetBcKpa, snowHoldKpa, atsCommandKpa);
-
-    if (targetBc < this._prevTargetBc - 45 && this.bcPressure > 60) {
-      const releaseStrength = Math.min(1.0, (this.bcPressure - targetBc) / 340);
-      if (callbacks.onBrakeAirRelease) callbacks.onBrakeAirRelease(releaseStrength);
-    }
-    this._prevTargetBc = targetBc;
+    const ebCommandKpa = this.ebBrakeActive ? 480 : 0;
+    const targetBc = Math.max(notch.targetBcKpa, snowHoldKpa, atsCommandKpa, ebCommandKpa);
 
     const bcRate =
-      notch.type === 'eb' || this.atsBrakeActive
+      notch.type === 'eb' || this.atsBrakeActive || this.ebBrakeActive
         ? 410 // 非常またはATS-P常用最大は急速立ち上がり
         : targetBc > this.bcPressure
           ? 235 // 込め速度 (kPa/s)
@@ -282,7 +360,7 @@ export class TrainPhysics {
 
     // 2. VVVF主電動機 引張力加速度 (m/s^2) ＋ 雨天時の微小空転再粘着制御
     let tractiveAccel = 0;
-    if (notch.type === 'power' && !this.doorsOpen && !this.atsBrakeActive) {
+    if (notch.type === 'power' && !this.doorsOpen && !this.atsBrakeActive && !this.ebBrakeActive) {
       const notchFactor = [0, 0.24, 0.45, 0.66, 0.84, 1.0][notch.level];
       const baseAccel = 0.70 * notchFactor; // m/s^2
       let speedCurve = 1.0;
@@ -301,7 +379,7 @@ export class TrainPhysics {
       }
       tractiveAccel = baseAccel * speedCurve * (1.0 - this.wheelSlip * 0.65);
       this.motorEffort = THREE.MathUtils.lerp(this.motorEffort, notchFactor, safeDt * 5.0);
-    } else if ((notch.type === 'brake' || this.atsBrakeActive) && this.speedKmh > 7.5) {
+    } else if ((notch.type === 'brake' || this.atsBrakeActive) && !this.ebBrakeActive && this.speedKmh > 7.5) {
       this.wheelSlip = THREE.MathUtils.lerp(this.wheelSlip, 0, safeDt * 8.0);
       const effLevel = this.atsBrakeActive ? 7.2 : notch.level;
       const regenFade = THREE.MathUtils.clamp((this.speedKmh - 7.5) / 8.0, 0, 1);
@@ -312,10 +390,10 @@ export class TrainPhysics {
       this.motorEffort = THREE.MathUtils.lerp(this.motorEffort, 0, safeDt * 7.0);
     }
 
-    // 3. 制動減速度 (m/s^2) — 耐雪ブレーキ単体(26kPa)の制輪子予熱圧は走行減速にはほぼ寄与させず実車通り軽快に
+    // 3. 制動減速度 (m/s^2)
     const effectiveRetardBc =
       notch.type === 'power' || notch.type === 'neutral'
-        ? this.atsBrakeActive
+        ? this.atsBrakeActive || this.ebBrakeActive
           ? this.bcPressure
           : Math.max(0, this.bcPressure - snowHoldKpa)
         : this.bcPressure;
@@ -348,7 +426,7 @@ export class TrainPhysics {
       this.notchIndex = 0;
     }
 
-    // 停止瞬間の静摩擦ロック反動（「階段緩め」をしないとカックンと頭が沈んで戻る実車挙動！）
+    // 停止瞬間の静摩擦ロック反動
     if (prevSpeed > 0.025 && this.speedMps === 0 && callbacks.onStopJerk) {
       callbacks.onStopJerk(this.bcPressure);
     }
@@ -373,7 +451,7 @@ export class TrainPhysics {
     }
     this._prevDistance = this.distance;
 
-    // 6. 前台車2軸 (先頭より -2.1m, -4.2m) のレール継目通過判定 -> リアルな「ガタン・ゴトン」発生！
+    // 6. 前台車2軸 (先頭より -2.1m, -4.2m) のレール継目通過判定（ロングレール・EJ・定尺・分岐器を区別！）
     const axle1 = this.distance - 2.1;
     const axle2 = this.distance - 4.2;
 
@@ -395,6 +473,9 @@ export class TrainPhysics {
       atsPatternSpeedKmh: this.atsPatternSpeedKmh,
       atsPatternApproach: this.atsPatternApproach,
       atsBrakeActive: this.atsBrakeActive,
+      ebTimer: this.ebTimer,
+      ebWarningActive: this.ebWarningActive,
+      ebBrakeActive: this.ebBrakeActive,
       snowBrake: this.snowBrake,
       isRaining: this.isRaining,
       wheelSlip: this.wheelSlip,
@@ -405,7 +486,6 @@ export class TrainPhysics {
 
   _checkAxleJointCrossings(prevX, currX, axleNumber, callbacks) {
     if (currX <= prevX) return;
-    // 二分探索で prevX より大きい最初のジョイントを検索
     const arr = this._jointPositions;
     let lo = 0;
     let hi = arr.length - 1;
@@ -420,6 +500,7 @@ export class TrainPhysics {
         callbacks.onRailJoint({
           axle: axleNumber,
           zoneType: arr[i].zoneType,
+          jointKind: arr[i].jointKind || 'standard_25m',
           speedKmh: this.speedKmh,
         });
       }

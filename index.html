@@ -68,12 +68,24 @@
                 </button>
               </div>
             </div>
+            <div class="config-group" style="grid-column: 1 / -1">
+              <label class="config-label">実録サンプリング音源（任意 · src/audio/samples/ 同梱またはここで直接読込）</label>
+              <div class="seg-buttons" style="align-items: center; gap: 10px">
+                <button type="button" class="seg-btn" id="btn-load-samples">
+                  音源ファイルを選択 (.wav / .mp3 / .ogg)
+                </button>
+                <input type="file" id="input-audio-samples" multiple accept="audio/*" hidden />
+                <span id="sample-status-label" style="font-size: 12px; opacity: 0.82">
+                  未選択（配置または選択した音源から自動で実音再生へ切り替わります）
+                </span>
+              </div>
+            </div>
           </div>
 
           <div class="controls-summary">
             <div class="key-item"><kbd>S</kbd> / <kbd>↓</kbd> 手前に引く（ブレーキ解除・加速 P1〜P5）</div>
             <div class="key-item"><kbd>W</kbd> / <kbd>↑</kbd> 奥に押す（力行解除・制動 B1〜B8）</div>
-            <div class="key-item"><kbd>Space</kbd> 惰行 (N) 戻し · <kbd>BS</kbd>/<kbd>E</kbd> 非常 (EB)</div>
+            <div class="key-item"><kbd>Space</kbd> 惰行 (N) · <kbd>BS</kbd>/<kbd>E</kbd> 非常 · <kbd>X</kbd> EBリセット</div>
             <div class="key-item"><kbd>ドラッグ</kbd> / <kbd>←</kbd><kbd>→</kbd> 360°見回し · <kbd>C</kbd> 正面戻し</div>
             <div class="key-item"><kbd>H</kbd> / <kbd>Enter</kbd> 警笛 · <kbd>L</kbd> 前照灯 · <kbd>D</kbd> ドア · <kbd>F</kbd> 駅メロ</div>
             <div class="key-item"><kbd>R</kbd> 雨天モード · <kbd>Y</kbd> ワイパー · <kbd>B</kbd> 耐雪制動</div>
@@ -103,7 +115,7 @@
               <option value="125">日暮里 片渡り分岐・14線コリドー (0.1 km)</option>
               <option value="220">日暮里〜三河島 大カーブ手前 (0.2 km)</option>
               <option value="1100">三河島手前・尾竹橋通り立体交差 (1.1 km)</option>
-              <option value="1200">三河島駅 1番線 (1.2 km)</option>
+              <option value="1200">三河島駅 2番線 (1.2 km)</option>
               <option value="2180">明治通り交差・高架直線 (2.2 km)</option>
               <option value="2460">南千住ガスタンク・隅田川貨物駅 (2.5 km)</option>
               <option value="3400">南千住駅 1番線・スカイツリー遠望 (3.4 km)</option>

@@ -282,7 +282,9 @@ function drawAnnunciatorMatrix(ctx, w, h, state) {
       ? Boolean(state.atsPatternApproach)
       : spd > lim - 2.5 || (rem > -15 && rem < 160 && spd > 28);
   const atsBrakeOn =
-    state.atsBrakeActive !== undefined ? Boolean(state.atsBrakeActive) : spd > lim + 2.5;
+    Boolean(state.ebBrakeActive) ||
+    (state.atsBrakeActive !== undefined ? Boolean(state.atsBrakeActive) : spd > lim + 2.5);
+  const ebAlert = Boolean(state.ebWarningActive || state.ebBrakeActive);
 
   const row1Defs = [
     { cols: ['P電源'], state: 'green' },
@@ -290,7 +292,7 @@ function drawAnnunciatorMatrix(ctx, w, h, state) {
     { cols: ['ブレーキ', '動作'], state: atsBrakeOn ? 'red' : 'off' },
     { cols: ['ブレーキ', '開放'], state: 'off' },
     { cols: ['ATS-P'], state: 'green' },
-    { cols: ['故障'], state: 'off' },
+    { cols: ['EB警報'], state: state.ebBrakeActive ? 'red' : ebAlert ? 'amber' : 'off' },
     { cols: ['ATS電源'], state: 'off' },
     { cols: ['ATS動作'], state: 'off' },
   ];

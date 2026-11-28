@@ -609,6 +609,7 @@ export class ScenerySystem {
     this.waterMaterial = null;
     this.oncomingTrains = [];
     this.parallelTrains = [];
+    this.passingTrainState = { intensity: 0, relSpeedKmh: 0, carPulse: 0 };
     this.roadVehicles = [];
     this.vehicleBodyInsts = {};
     this.vehicleHeadlightInst = null;
@@ -4166,7 +4167,7 @@ export class ScenerySystem {
     }
   }
 
-  update(dt, elapsedTime, playerDistance, onTrainPassCallback) {
+  update(dt, elapsedTime, playerDistance, onTrainPassCallback, playerSpeedMps = 0) {
     if (this.waterMaterial && this.waterMaterial.normalMap) {
       this.waterMaterial.normalMap.offset.x = elapsedTime * 0.035;
       this.waterMaterial.normalMap.offset.y = elapsedTime * 0.018;
@@ -4197,8 +4198,11 @@ export class ScenerySystem {
       mesh.quaternion.setFromRotationMatrix(basis);
     };
 
-    // 常磐線上り本線 対向列車（E531系・E231系0番台）の走行更新
-    // 前後台車中心（±6.85m）を実際の上りS字曲線上に厳密追従させ、自然なヨー角・ピッチ角で車体が首を振る！
+    // 常磐線上り本線 対向列車（E531系・E231系0番台）の走行更新 ＆ 通過中連続風圧・轟音トラッキング
+    let maxPassIntensity = 0;
+    let passRelSpeedKmh = 0;
+    let passCarPulse = 0;
+
     for (const tr of this.oncomingTrains) {
       tr.headD -= tr.speedMps * dt;
       if (tr.headD < ROUTE_START_BUFFER - 240) {
@@ -4206,12 +4210,29 @@ export class ScenerySystem {
         tr.passedPlayer = false;
       }
 
-      if (!tr.passedPlayer && tr.headD <= playerDistance + 12 && tr.headD >= playerDistance - 45) {
+      const spacing = tr.carMeshes.carSpacing || 20.0;
+      const frontNoseD = tr.headD - 10.0;
+      const tailEndD = tr.headD + (tr.cars - 1) * spacing + 10.0;
+
+      // 先頭車がすれ違った瞬間の風圧衝撃（「ビュワッ！」）
+      if (!tr.passedPlayer && frontNoseD <= playerDistance + 10 && frontNoseD >= playerDistance - 38) {
         tr.passedPlayer = true;
         if (onTrainPassCallback) onTrainPassCallback();
       }
 
-      const spacing = tr.carMeshes.carSpacing || 20.0;
+      // 1号車先頭〜10号車最後尾が運転室真横を通過している間ずっと続く風圧＆台車轟音エンベロープ！
+      if (playerDistance >= frontNoseD - 14.0 && playerDistance <= tailEndD + 16.0) {
+        const enterEnv = THREE.MathUtils.smoothstep(playerDistance, frontNoseD - 14.0, frontNoseD + 4.0);
+        const exitEnv = 1.0 - THREE.MathUtils.smoothstep(playerDistance, tailEndD - 2.0, tailEndD + 16.0);
+        const env = enterEnv * exitEnv;
+        if (env > maxPassIntensity) {
+          maxPassIntensity = env;
+          passRelSpeedKmh = (tr.speedMps + Math.max(0, playerSpeedMps)) * 3.6;
+          // 20m ごとの連結面（幌）通過による周期的な風圧うねり（「ボッ・ボッ・ボッ…」）
+          passCarPulse = 0.5 + 0.5 * Math.cos(((playerDistance - tr.headD) / spacing) * Math.PI * 2);
+        }
+      }
+
       const halfBogie = 6.85;
       for (let c = 0; c < tr.cars; c++) {
         const carD = tr.headD + c * spacing;
@@ -4226,6 +4247,12 @@ export class ScenerySystem {
         orientCarByBogies(mesh, pFront, pRear);
       }
     }
+
+    this.passingTrainState = {
+      intensity: maxPassIntensity,
+      relSpeedKmh: passRelSpeedKmh,
+      carPulse: passCarPulse,
+    };
 
     // 日暮里14線メガコリドー（東北新幹線E5系・東北本線湘南色・京浜東北E233・山手線E235）走行更新
     const visibleNearNippori = playerDistance < 1400;

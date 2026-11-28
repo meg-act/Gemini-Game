@@ -142,17 +142,44 @@ export class DriverCabView {
     this.lookPitchOffset = 0;
   }
 
-  triggerJointImpulse({ axle = 1, zoneType = 'viaduct_ballast', speedKmh = 40 }) {
+  triggerJointImpulse({
+    axle = 1,
+    zoneType = 'viaduct_ballast',
+    jointKind = 'standard_25m',
+    speedKmh = 40,
+  }) {
     const scale = Math.min(1.2, Math.max(0.15, speedKmh / 75));
-    const zoneBoost = zoneType === 'turnout' ? 1.45 : zoneType === 'truss_bridge' ? 1.2 : 0.85;
-    const amp = scale * zoneBoost;
+    let kindBoost = 0.88;
+    if (jointKind === 'cwr_weld') kindBoost = 0.34;
+    else if (jointKind === 'expansion_ej') kindBoost = 0.85;
+    else if (jointKind === 'turnout_frog' || zoneType === 'turnout') kindBoost = 1.48;
+    else if (jointKind === 'bridge_deck' || zoneType === 'truss_bridge') kindBoost = 1.22;
 
+    const amp = scale * kindBoost;
     this.suspVelY += (axle === 1 ? 0.082 : 0.062) * amp;
     this.suspVelPitch += (axle === 1 ? 0.013 : -0.010) * amp;
     this.suspVelRoll += ((Math.random() - 0.5) * 0.020) * amp;
-    if (zoneType === 'turnout') {
-      this.suspVelX += (Math.random() - 0.5) * 0.055 * amp;
+    if (jointKind === 'turnout_frog' || zoneType === 'turnout') {
+      this.suspVelX += (Math.random() - 0.5) * 0.058 * amp;
     }
+  }
+
+  /**
+   * 運転台「EBリセット」黄色ボタンの押下ストローク演出を発火
+   */
+  triggerEbResetPress() {
+    this._ebBtnDepress = 1.0;
+  }
+
+  /**
+   * 画面クリック座標 (NDC: -1..+1) が運転台3Dスイッチ（EBリセットボタン等）にヒットしたか判定
+   */
+  raycastCabButton(ndcX, ndcY) {
+    if (!this.cabInterior.visible || !this._clickableCabMeshes?.length) return null;
+    if (!this._raycaster) this._raycaster = new THREE.Raycaster();
+    this._raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), this.camera);
+    const hits = this._raycaster.intersectObjects(this._clickableCabMeshes, false);
+    return hits.length > 0 ? hits[0].object.userData.cabAction || null : null;
   }
 
   /**
@@ -548,15 +575,33 @@ export class DriverCabView {
     hillStartCap.position.set(0.022, 0.098, 0);
     grabGroup.add(hillStartCap);
 
-    // 黄色ベゼル付き EBリセット押しボタン
-    const ebResetRing = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.014, 0.015, 0.010, 14),
-      new THREE.MeshStandardMaterial({ color: 0xe8b923, roughness: 0.35 })
-    );
-    ebResetRing.position.set(-0.36, 1.915, -0.45);
-    this.cabInterior.add(ebResetRing);
+    // 黄色ベゼル＆誤操作防止ガードリング付き「EBリセット」照光押しボタン（クリックまたは X キーで押下！）
+    this._ebBtnDepress = 0;
+    this._clickableCabMeshes = this._clickableCabMeshes || [];
 
-    const miniIndCols = [0x1e5aa8, 0xeef2f6, 0xc93232];
+    const ebCollar = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.019, 0.020, 0.012, 16),
+      chromeMat
+    );
+    ebCollar.position.set(-0.36, 1.914, -0.45);
+    this.cabInterior.add(ebCollar);
+
+    this.ebResetBtnMat = new THREE.MeshStandardMaterial({
+      color: 0xe8b923,
+      emissive: new THREE.Color(0xffaa00),
+      emissiveIntensity: 0.0,
+      roughness: 0.32,
+    });
+    this.ebResetBtnMesh = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.014, 0.014, 0.014, 16),
+      this.ebResetBtnMat
+    );
+    this.ebResetBtnMesh.position.set(-0.36, 1.920, -0.45);
+    this.ebResetBtnMesh.userData.cabAction = 'eb_reset';
+    this.cabInterior.add(this.ebResetBtnMesh);
+    this._clickableCabMeshes.push(this.ebResetBtnMesh);
+
+    const miniIndCols = [0x1e5aa8, 0xc8cfd8, 0xc93232];
     miniIndCols.forEach((col, i) => {
       const ind = new THREE.Mesh(
         new THREE.BoxGeometry(0.018, 0.008, 0.022),
@@ -565,9 +610,11 @@ export class DriverCabView {
       ind.position.set(-0.41 + i * 0.026, 1.892, -0.35);
       this.cabInterior.add(ind);
     });
-    const midSwitchBlock = new THREE.Mesh(new THREE.BoxGeometry(0.075, 0.026, 0.065), hoodLipMat);
+    const midSwitchBlock = new THREE.Mesh(new THREE.BoxGeometry(0.082, 0.026, 0.072), hoodLipMat);
     midSwitchBlock.position.set(-0.36, 1.898, -0.45);
+    midSwitchBlock.userData.cabAction = 'eb_reset';
     this.cabInterior.add(midSwitchBlock);
+    this._clickableCabMeshes.push(midSwitchBlock);
 
     // ---- 6. 右側の一段高いライトグレースイッチボックス ＋ 白いデジタル列車無線受話器 ----
     const rightConsole = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.068, 0.36), deskGreyMat);
@@ -2433,6 +2480,16 @@ export class DriverCabView {
     }
     if (this.wiperKnobMesh) {
       this.wiperKnobMesh.rotation.y = this.wiperActive ? 0.65 : 0.0;
+    }
+    if (this.ebResetBtnMesh && this.ebResetBtnMat) {
+      this._ebBtnDepress = Math.max(0, (this._ebBtnDepress || 0) - safeDt * 6.5);
+      this.ebResetBtnMesh.position.y = 1.920 - this._ebBtnDepress * 0.0055;
+      if (simState.ebWarningActive || simState.ebBrakeActive) {
+        const blink = 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(elapsedTime * 16.0));
+        this.ebResetBtnMat.emissiveIntensity = simState.ebBrakeActive ? 2.2 : 1.8 * blink;
+      } else {
+        this.ebResetBtnMat.emissiveIntensity = 0.0;
+      }
     }
 
     // 5. 雨天時の屋外雨粒・フロントガラス水滴・3Dワイパー払拭更新

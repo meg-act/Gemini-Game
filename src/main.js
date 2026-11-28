@@ -111,7 +111,6 @@ let isDrivingStarted = false;
 let isHudVisible = true;
 let wasMovingSinceStop = false;
 let toastTimeoutId = null;
-let lastAtosCloseMs = -99999;
 
 function showToast(message, durationMs = 4200) {
   statusToast.textContent = message;
@@ -120,13 +119,6 @@ function showToast(message, durationMs = 4200) {
   toastTimeoutId = setTimeout(() => {
     statusToast.classList.add('hidden');
   }, durationMs);
-}
-
-function getNotchClickKind(notch) {
-  if (!notch) return 'normal';
-  if (notch.type === 'eb') return 'eb';
-  if (notch.type === 'neutral') return 'neutral';
-  return 'normal';
 }
 
 function syncWeatherAndLightButtons() {
@@ -167,7 +159,7 @@ function applyWeatherMode(mode, { silentToast = false } = {}) {
   }
 }
 
-// --- ノッチラダー UI 構築（マウスクリックでも直接ノッチ投入可能） ---
+// --- ノッチラダー UI 構築（操作音は物理コントローラーに委ねるため合成クリック音なし） ---
 const notchChipEls = [];
 NOTCH_STEPS.forEach((step, index) => {
   const btn = document.createElement('button');
@@ -181,9 +173,10 @@ NOTCH_STEPS.forEach((step, index) => {
       showToast('扉が開いています。Dキーまたは「扉閉」ボタンで扉を閉めてください。', 2800);
       return;
     }
+    physics.notifyDriverActivity();
+    sound.setEbBuzzerActive(false);
     if (physics.notchIndex !== index) {
       physics.notchIndex = index;
-      sound.playNotchClick(getNotchClickKind(physics.currentNotch));
       syncNotchHud();
       broadcastCockpitTelemetry(null, true);
     }
@@ -207,7 +200,44 @@ function syncDoorButton() {
 }
 syncDoorButton();
 
-// --- スタートオーバーレイの設定ボタン ---
+// --- スタートオーバーレイの設定ボタン ＆ 実録サンプリング音源ローダー ---
+const btnLoadSamples = document.getElementById('btn-load-samples');
+const inputAudioSamples = document.getElementById('input-audio-samples');
+const sampleStatusLabel = document.getElementById('sample-status-label');
+
+async function handleSelectedAudioFiles(files) {
+  if (!files || files.length === 0) return;
+  sound.init();
+  const keys = await sound.loadUserAudioFiles(files);
+  const allKeys = sound.getLoadedSampleKeys();
+  if (sampleStatusLabel) {
+    sampleStatusLabel.textContent =
+      allKeys.length > 0
+        ? `読込済 (${allKeys.length}件): ${allKeys.join(', ')}`
+        : '有効な音声ファイルが見つかりませんでした';
+  }
+  if (keys.length > 0) {
+    showToast(`サンプリング音源を ${keys.length} 件読み込みました: ${keys.join(', ')}`, 4200);
+  }
+}
+
+if (btnLoadSamples && inputAudioSamples) {
+  btnLoadSamples.addEventListener('click', () => inputAudioSamples.click());
+  inputAudioSamples.addEventListener('change', (e) => {
+    handleSelectedAudioFiles(e.target.files);
+  });
+}
+
+window.addEventListener('dragover', (e) => {
+  e.preventDefault();
+});
+window.addEventListener('drop', (e) => {
+  if (e.dataTransfer?.files?.length) {
+    e.preventDefault();
+    handleSelectedAudioFiles(e.dataTransfer.files);
+  }
+});
+
 document.getElementById('service-select').addEventListener('click', (e) => {
   const btn = e.target.closest('[data-service]');
   if (!btn) return;
@@ -376,6 +406,8 @@ function buildCockpitTelemetry(physState) {
     atsPatternSpeedKmh: physics.atsPatternSpeedKmh,
     atsPatternApproach: physics.atsPatternApproach,
     atsBrakeActive: physics.atsBrakeActive,
+    ebWarningActive: physics.ebWarningActive,
+    ebBrakeActive: physics.ebBrakeActive,
     snowBrake: physics.snowBrake,
     isRaining: physics.isRaining,
     frame: route.getFrameAt(physics.distance),
@@ -394,6 +426,8 @@ function buildCockpitTelemetry(physState) {
     atsPatternSpeedKmh: st.atsPatternSpeedKmh ?? physics.atsPatternSpeedKmh,
     atsPatternApproach: Boolean(st.atsPatternApproach ?? physics.atsPatternApproach),
     atsBrakeActive: Boolean(st.atsBrakeActive ?? physics.atsBrakeActive),
+    ebWarningActive: Boolean(st.ebWarningActive ?? physics.ebWarningActive),
+    ebBrakeActive: Boolean(st.ebBrakeActive ?? physics.ebBrakeActive),
     snowBrake: Boolean(st.snowBrake ?? physics.snowBrake),
     isRaining: Boolean(st.isRaining ?? physics.isRaining),
     headlightMode: cabView.headlightMode,
@@ -705,9 +739,10 @@ function handleIncomingCockpitMessage(data) {
             showToast('戸閉保安作動中：扉を閉めてから力行してください', 2600);
             return;
           }
+          physics.notifyDriverActivity();
+          sound.setEbBuzzerActive(false);
           if (physics.notchIndex !== idx) {
             physics.notchIndex = idx;
-            sound.playNotchClick(getNotchClickKind(physics.currentNotch));
             syncNotchHud();
             broadcastCockpitTelemetry(null, true);
           }
@@ -716,10 +751,10 @@ function handleIncomingCockpitMessage(data) {
       }
       case 'pullHandle': {
         const res = physics.pullHandle();
+        sound.setEbBuzzerActive(false);
         if (res.blockedByDoor) {
           showToast('戸閉保安作動中：扉を閉めてから力行してください', 2600);
         } else if (res.changed) {
-          sound.playNotchClick(getNotchClickKind(res.notch));
           syncNotchHud();
           broadcastCockpitTelemetry(null, true);
         }
@@ -727,8 +762,8 @@ function handleIncomingCockpitMessage(data) {
       }
       case 'pushHandle': {
         const res = physics.pushHandle();
+        sound.setEbBuzzerActive(false);
         if (res.changed) {
-          sound.playNotchClick(getNotchClickKind(res.notch));
           syncNotchHud();
           broadcastCockpitTelemetry(null, true);
         }
@@ -736,8 +771,8 @@ function handleIncomingCockpitMessage(data) {
       }
       case 'setNeutral': {
         const res = physics.setNeutral();
+        sound.setEbBuzzerActive(false);
         if (res.changed) {
-          sound.playNotchClick('neutral');
           syncNotchHud();
           broadcastCockpitTelemetry(null, true);
         }
@@ -745,15 +780,20 @@ function handleIncomingCockpitMessage(data) {
       }
       case 'applyEB': {
         const res = physics.applyEmergencyBrake();
+        sound.setEbBuzzerActive(false);
         if (res.changed) {
-          sound.playNotchClick('eb');
           syncNotchHud();
           broadcastCockpitTelemetry(null, true);
           showToast('非常ブレーキ (EB) 投入', 2200);
         }
         break;
       }
+      case 'ebReset':
+        handleEbReset();
+        break;
       case 'horn':
+        physics.notifyDriverActivity();
+        sound.setEbBuzzerActive(false);
         sound.playHorn();
         break;
       case 'toggleDoors':
@@ -799,7 +839,6 @@ hudJumpSelect.addEventListener('change', (e) => {
   if (!Number.isNaN(targetD)) {
     const zone = route.getTrackZoneAt(targetD);
     if (isTheWorldActive) {
-      // 時間停止中は列車を動かさず、自由カメラだけ指定区間の鳥瞰位置へワープ！
       const frame = route.getFrameAt(targetD);
       camera.position.copy(frame.position).add(new THREE.Vector3(0, 6.2, 0));
       specYaw = Math.atan2(-frame.tangent.x, -frame.tangent.z);
@@ -813,6 +852,7 @@ hudJumpSelect.addEventListener('change', (e) => {
       wasMovingSinceStop = false;
       sound.stopDepartureMelody();
       sound.setAtsChimeActive(false);
+      sound.setEbBuzzerActive(false);
       syncNotchHud();
       syncDoorButton();
       broadcastCockpitTelemetry(null, true);
@@ -841,7 +881,8 @@ if (btnToggleWeather) {
 
 function handleToggleWiper() {
   sound.init();
-  sound.playSwitchClick();
+  physics.notifyDriverActivity();
+  sound.setEbBuzzerActive(false);
   const active = cabView.toggleWiper();
   sound.playWiperBlade(1);
   syncWeatherAndLightButtons();
@@ -856,7 +897,8 @@ if (btnToggleWiper) {
 
 function handleToggleBeam() {
   sound.init();
-  sound.playSwitchClick();
+  physics.notifyDriverActivity();
+  sound.setEbBuzzerActive(false);
   const mode = cabView.toggleHeadlightBeam();
   syncWeatherAndLightButtons();
   broadcastCockpitTelemetry(null, true);
@@ -874,10 +916,25 @@ if (btnToggleBeam) {
 
 function handleToggleSnowBrake() {
   sound.init();
-  sound.playSwitchClick();
   const on = physics.toggleSnowBrake();
+  sound.setEbBuzzerActive(false);
   broadcastCockpitTelemetry(null, true);
   showToast(on ? '耐雪ブレーキ：ON（制輪子予熱圧保持）' : '耐雪ブレーキ：OFF', 2400);
+}
+
+function handleEbReset() {
+  sound.init();
+  const res = physics.resetEbDevice();
+  cabView.triggerEbResetPress();
+  sound.setEbBuzzerActive(false);
+  sound.playEbResetSwitch();
+  announcements.onEbEvent({ type: 'reset' });
+  broadcastCockpitTelemetry(null, true);
+  if (res.wasActive) {
+    showToast('EB装置リセット完了', 1800);
+  } else {
+    showToast('EBリセットボタン確認（60秒タイマークリア）', 1500);
+  }
 }
 
 function handleToggleView() {
@@ -912,6 +969,8 @@ btnRestoreHud.addEventListener('click', () => setHudVisibility(true));
 
 btnHorn.addEventListener('click', () => {
   sound.init();
+  physics.notifyDriverActivity();
+  sound.setEbBuzzerActive(false);
   sound.playHorn();
 });
 
@@ -921,9 +980,8 @@ function handleDepartureMelody() {
   const platSt = physics.getCurrentStationAtPlatform();
   if (sound.isMelodyPlaying) {
     sound.stopDepartureMelody();
-    if (platSt && performance.now() - lastAtosCloseMs > 4500) {
-      lastAtosCloseMs = performance.now();
-      announcements.onDoorsClosing(platSt);
+    if (platSt) {
+      announcements.onMelodyOff(platSt);
     } else {
       showToast('発車メロディを停止しました', 1800);
     }
@@ -953,6 +1011,7 @@ if (btnMelody) {
 function handleDoorToggle() {
   sound.init();
   const res = physics.toggleDoors();
+  sound.setEbBuzzerActive(false);
   if (!res.toggled) {
     showToast('走行中は扉を開閉できません（停車後に操作してください）', 2500);
     return;
@@ -960,8 +1019,7 @@ function handleDoorToggle() {
   const platSt = physics.getCurrentStationAtPlatform();
   if (!res.doorsOpen) {
     sound.stopDepartureMelody();
-    if (platSt && performance.now() - lastAtosCloseMs > 4500) {
-      lastAtosCloseMs = performance.now();
+    if (platSt) {
       announcements.onDoorsClosing(platSt);
     }
   }
@@ -1088,10 +1146,11 @@ window.addEventListener('keydown', (e) => {
     case 'KeyZ': {
       e.preventDefault();
       const res = physics.pullHandle();
+      sound.setEbBuzzerActive(false);
+      announcements.onEbEvent({ type: 'reset' });
       if (res.blockedByDoor) {
         showToast('戸閉保安作動中：Dキーで扉を閉めてから力行してください', 2600);
       } else if (res.changed) {
-        sound.playNotchClick(getNotchClickKind(res.notch));
         syncNotchHud();
         broadcastCockpitTelemetry(null, true);
       }
@@ -1103,8 +1162,9 @@ window.addEventListener('keydown', (e) => {
     case 'Period': {
       e.preventDefault();
       const res = physics.pushHandle();
+      sound.setEbBuzzerActive(false);
+      announcements.onEbEvent({ type: 'reset' });
       if (res.changed) {
-        sound.playNotchClick(getNotchClickKind(res.notch));
         syncNotchHud();
         broadcastCockpitTelemetry(null, true);
       }
@@ -1114,8 +1174,9 @@ window.addEventListener('keydown', (e) => {
     case 'KeyN': {
       e.preventDefault();
       const res = physics.setNeutral();
+      sound.setEbBuzzerActive(false);
+      announcements.onEbEvent({ type: 'reset' });
       if (res.changed) {
-        sound.playNotchClick('neutral');
         syncNotchHud();
         broadcastCockpitTelemetry(null, true);
       }
@@ -1126,18 +1187,29 @@ window.addEventListener('keydown', (e) => {
     case 'Slash': {
       e.preventDefault();
       const res = physics.applyEmergencyBrake();
+      sound.setEbBuzzerActive(false);
+      announcements.onEbEvent({ type: 'reset' });
       if (res.changed) {
-        sound.playNotchClick('eb');
         syncNotchHud();
         broadcastCockpitTelemetry(null, true);
         showToast('非常ブレーキ (EB) 投入', 2200);
       }
       break;
     }
+    case 'KeyX': {
+      if (!e.repeat) {
+        e.preventDefault();
+        handleEbReset();
+      }
+      break;
+    }
     case 'KeyH':
     case 'Enter': {
       e.preventDefault();
-      sound.playHorn();
+      physics.notifyDriverActivity();
+      sound.setEbBuzzerActive(false);
+      announcements.onEbEvent({ type: 'reset' });
+      sound.playHorn(e.shiftKey ? 'elec' : 'air');
       break;
     }
     case 'KeyF': {
@@ -1194,12 +1266,22 @@ window.addEventListener('blur', () => {
   heldKeys.clear();
 });
 
-// --- マウスドラッグ 360° 視点回転 ＆ ホイール移動速度調整 ---
+// --- 運転台3Dスイッチ（EBリセットボタン等）のクリック判定 ＆ マウスドラッグ 360° 視点回転 ---
 let isDraggingLook = false;
 let prevPointerX = 0;
 let prevPointerY = 0;
 
 canvas.addEventListener('pointerdown', (e) => {
+  if (!isTheWorldActive && isDrivingStarted) {
+    const rect = canvas.getBoundingClientRect();
+    const ndcX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    const ndcY = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+    const hitAction = cabView.raycastCabButton(ndcX, ndcY);
+    if (hitAction === 'eb_reset') {
+      handleEbReset();
+      return;
+    }
+  }
   isDraggingLook = true;
   prevPointerX = e.clientX;
   prevPointerY = e.clientY;
@@ -1304,14 +1386,11 @@ function stepFrame({ skipRender = false, fixedDt = null } = {}) {
 
   const dt = rawDt;
 
-  // 1. 車両縦物理・ブレーキ圧・ATS-Pパターン・分岐器揺れ・停止カックン判定の更新
+  // 1. 車両縦物理・ブレーキ圧・ATS-Pパターン・EB装置監視・分岐器揺れ・停止カックン判定の更新
   const physState = physics.update(dt, {
     onRailJoint: (jointEvt) => {
       cabView.triggerJointImpulse(jointEvt);
       sound.playRailJoint(jointEvt);
-    },
-    onBrakeAirRelease: (strength) => {
-      sound.playBrakeAirRelease(strength);
     },
     onTurnoutJolt: (strength) => {
       cabView.triggerTurnoutJolt(strength);
@@ -1329,8 +1408,20 @@ function stepFrame({ skipRender = false, fixedDt = null } = {}) {
       }
       announcements.onAtsEvent(evt);
     },
+    onEbEvent: (evt) => {
+      if (evt.type === 'warning_start') {
+        sound.setEbBuzzerActive(true);
+      } else if (evt.type === 'eb_apply') {
+        sound.setEbBuzzerActive(true);
+        syncNotchHud();
+      } else if (evt.type === 'reset') {
+        sound.setEbBuzzerActive(false);
+      }
+      announcements.onEbEvent(evt);
+    },
   });
   sound.setAtsChimeActive(Boolean(physState.atsBrakeActive));
+  sound.setEbBuzzerActive(Boolean(physState.ebWarningActive || physState.ebBrakeActive));
 
   if (physState.speedKmh > 3.5) {
     wasMovingSinceStop = true;
@@ -1340,7 +1431,6 @@ function stepFrame({ skipRender = false, fixedDt = null } = {}) {
     if (atStation) {
       const diff = physState.distance - atStation.stopDistance;
       const signStr = diff >= 0 ? `+${diff.toFixed(2)}` : diff.toFixed(2);
-      announcements.onStationStop(atStation, diff);
       if (atStation.id === 'kitasenju') {
         showToast(
           `終着 北千住駅 到着 ｜ [15] 停止目標との差 ${signStr} m — ご乗務お疲れさまでした`,
@@ -1355,7 +1445,7 @@ function stepFrame({ skipRender = false, fixedDt = null } = {}) {
     }
   }
 
-  // 2. 次停車駅・制限速度・閉塞信号機・自動放送＆指差喚呼の更新
+  // 2. 次停車駅・制限速度・閉塞信号機・車内自動放送の更新
   const nextStop = physics.getNextScheduledStop();
   const remainingMeters = nextStop ? nextStop.stopDistance - physState.distance : 0;
   const speedLimitObj = route.getSpeedLimitAt(physState.distance);
@@ -1369,12 +1459,18 @@ function stepFrame({ skipRender = false, fixedDt = null } = {}) {
     isDrivingStarted,
   });
 
-  // 3. 沿線風景（隅田川さざ波・航空障害灯・幹線道路交通・上り対向列車）更新
-  scenery.update(dt, elapsed, physState.distance, () => {
-    sound.playPassingTrainWhoosh();
-  });
+  // 3. 沿線風景（隅田川さざ波・航空障害灯・幹線道路交通・上り対向列車通過状態）更新
+  scenery.update(
+    dt,
+    elapsed,
+    physState.distance,
+    () => {
+      sound.playPassingTrainWhoosh();
+    },
+    physState.speedMps
+  );
 
-  // 4. 3D運転台・360°見回し・6自由度サスペンション・駅照明連動・ワイパー・3D計器盤更新
+  // 4. 3D運転台・360°見回し・6自由度サスペンション・駅照明連動・ワイパー・EBボタン・3D計器盤更新
   const yawKey = (heldKeys.has('ArrowLeft') ? 1 : 0) - (heldKeys.has('ArrowRight') ? 1 : 0);
   const pitchKey =
     heldKeys.has('ShiftLeft') || heldKeys.has('ShiftRight')
@@ -1398,7 +1494,7 @@ function stepFrame({ skipRender = false, fixedDt = null } = {}) {
     },
   });
 
-  // 5. Web Audio 連続走行音更新（VVVF・転動・鉄橋・フランジ・雨音・低速制輪子摩擦・CP空気圧縮機）
+  // 5. Web Audio 連続走行音更新（VVVF・転動・ロングレール・鉄橋・フランジ・雨音・制輪子・CP・対向列車通過中轟音）
   sound.update({
     speedKmh: physState.speedKmh,
     motorEffort: physState.motorEffort,
@@ -1406,6 +1502,7 @@ function stepFrame({ skipRender = false, fixedDt = null } = {}) {
     curvature: physState.frame.curvature,
     bcPressure: physState.bcPressure,
     mrPressure: physState.mrPressure,
+    passingTrain: scenery.passingTrainState,
   });
 
   // 6. HUD 表示 ＆ 別窓計器パネル（SideCar）テレメトリ同期
@@ -1462,7 +1559,7 @@ window.__sim = {
     physics.speedMps = speedKmh / 3.6;
     physics.speedKmh = speedKmh;
     announcements.reset(d);
-    cabView._panelTimer = 1.0; // 計器盤を即時更新
+    cabView._panelTimer = 1.0;
     stepFrame({ skipRender: isRenderPaused, fixedDt: 0.016 });
     broadcastCockpitTelemetry(null, true);
   },
@@ -1491,6 +1588,15 @@ window.__sim = {
     syncWeatherAndLightButtons();
     if (!isRenderPaused) stepFrame();
   },
+  triggerEbTest(sec = 60.1) {
+    physics.ebTimer = sec;
+    stepFrame({ skipRender: true, fixedDt: 0.05 });
+    return this.getState();
+  },
+  resetEb() {
+    handleEbReset();
+    return this.getState();
+  },
   getState() {
     return {
       distance: physics.distance,
@@ -1502,6 +1608,10 @@ window.__sim = {
       atsPatternSpeedKmh: physics.atsPatternSpeedKmh,
       atsPatternApproach: physics.atsPatternApproach,
       atsBrakeActive: physics.atsBrakeActive,
+      ebTimer: physics.ebTimer,
+      ebWarningActive: physics.ebWarningActive,
+      ebBrakeActive: physics.ebBrakeActive,
+      passingTrain: scenery.passingTrainState,
       snowBrake: physics.snowBrake,
       weatherMode: atmosphere.weatherMode,
       wiperActive: cabView.wiperActive,
@@ -1573,23 +1683,26 @@ window.__sim = {
       curvature: 0.0025,
       bcPressure: 210,
       mrPressure: 790,
+      passingTrain: { intensity: 0.9, relSpeedKmh: 135, carPulse: 0.8 },
     });
     sound.update({ speedKmh: 36, motorEffort: 0.9, zoneType: 'truss_bridge', curvature: 0 });
     sound.update({ speedKmh: 52, motorEffort: -0.65, zoneType: 'viaduct_ballast', curvature: 0 });
     sound.setRainIntensity(0.0);
-    sound.playSwitchClick();
-    sound.playNotchClick('normal');
-    sound.playNotchClick('neutral');
-    sound.playNotchClick('eb');
-    sound.playHorn();
+    sound.playRailJoint({ axle: 1, zoneType: 'viaduct_ballast', jointKind: 'cwr_weld', speedKmh: 75 });
+    sound.playRailJoint({ axle: 1, zoneType: 'viaduct_ballast', jointKind: 'expansion_ej', speedKmh: 75 });
+    sound.playRailJoint({ axle: 1, zoneType: 'turnout', jointKind: 'turnout_frog', speedKmh: 45 });
+    sound.playRailJoint({ axle: 1, zoneType: 'sharp_curve', jointKind: 'standard_25m', speedKmh: 58 });
+    sound.playHorn('air');
     sound.playDoorChime(true);
     sound.playDoorChime(false);
     sound.playConductorBuzzer();
-    sound.playOnboardChime();
     sound.playWiperBlade(1);
     sound.playAtsChimePair();
     sound.setAtsChimeActive(true);
     sound.setAtsChimeActive(false);
+    sound.setEbBuzzerActive(true);
+    sound.setEbBuzzerActive(false);
+    sound.playEbResetSwitch();
     sound.playDepartureMelody('nippori');
     sound.playDepartureMelody('mikawashima');
     sound.playDepartureMelody('minamisenju');
@@ -1600,6 +1713,7 @@ window.__sim = {
     return {
       initialized: sound.isInitialized,
       state: sound.ctx ? sound.ctx.state : 'none',
+      loadedSamples: sound.getLoadedSampleKeys(),
       titles: ['nippori', 'mikawashima', 'minamisenju', 'kitasenju'].map((id) =>
         sound.getMelodyTitle(id)
       ),
