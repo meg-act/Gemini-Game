@@ -333,12 +333,42 @@ export class TrainSoundEngine {
     this.rainFilter.connect(this.rainGain);
     this.rainGain.connect(this.masterGain);
     this.rainSource.start(now, 0.7);
+
+    // 7. 停止寸前（14 km/h → 0 km/h）の合成制輪子・踏面ブレーキ摩擦音（「シュー…ギュッ」）
+    this.shoeSource = this.ctx.createBufferSource();
+    this.shoeSource.buffer = this._noiseBuffer;
+    this.shoeSource.loop = true;
+    this.shoeFilter = this.ctx.createBiquadFilter();
+    this.shoeFilter.type = 'bandpass';
+    this.shoeFilter.frequency.value = 2150;
+    this.shoeFilter.Q.value = 2.6;
+    this.shoeGain = this.ctx.createGain();
+    this.shoeGain.gain.value = 0.0;
+    this.shoeSource.connect(this.shoeFilter);
+    this.shoeFilter.connect(this.shoeGain);
+    this.shoeGain.connect(this.masterGain);
+    this.shoeSource.start(now, 1.3);
+
+    // 8. クハE531床下 電動空気圧縮機（CP）動作音（MR元空気溜め圧力低下時に「ブォォォン…」自動稼働！）
+    this._cpRunning = false;
+    this.cpOsc = this.ctx.createOscillator();
+    this.cpOsc.type = 'sawtooth';
+    this.cpOsc.frequency.value = 58;
+    const cpLp = this.ctx.createBiquadFilter();
+    cpLp.type = 'lowpass';
+    cpLp.frequency.value = 185;
+    this.cpGain = this.ctx.createGain();
+    this.cpGain.gain.value = 0.0;
+    this.cpOsc.connect(cpLp);
+    cpLp.connect(this.cpGain);
+    this.cpGain.connect(this.masterGain);
+    this.cpOsc.start(now);
   }
 
   /**
-   * 毎フレーム車両速度・モータートルク・軌道区間と同期して連続音を更新
+   * 毎フレーム車両速度・モータートルク・軌道区間・空気圧と同期して連続音を更新
    */
-  update({ speedKmh, motorEffort, zoneType, curvature }) {
+  update({ speedKmh, motorEffort, zoneType, curvature, bcPressure = 0, mrPressure = 850 }) {
     if (!this.isInitialized || !this.ctx) return;
     const now = this.ctx.currentTime;
     const speedNorm = Math.min(1.0, speedKmh / 100);
@@ -454,12 +484,52 @@ export class TrainSoundEngine {
       this.flangeGain.gain.setTargetAtTime(0.0, now, 0.1);
     }
 
-    // 5. 雨天時の雨音＆濡れレール飛沫ノイズ（速度が上がるほど高域シャー音が増す）
+    // 5. 雨天時の雨音＆濡れレール飛沫ノイズ
     if (this.rainGain && this.rainFilter) {
       const targetRainVol = this.rainIntensity * (0.042 + speedNorm * 0.058);
       this.rainGain.gain.setTargetAtTime(targetRainVol, now, 0.15);
       this.rainFilter.frequency.setTargetAtTime(1650 + speedKmh * 14, now, 0.15);
     }
+
+    // 6. 低速停止寸前の空気ブレーキ制輪子摩擦音（純電気ブレーキ失効域 0.15〜14 km/h）
+    if (this.shoeGain && this.shoeFilter) {
+      let shoeVol = 0.0;
+      if (speedKmh > 0.12 && speedKmh < 14.5 && bcPressure > 42) {
+        const spdWindow = Math.sin((Math.min(14.5, speedKmh) / 14.5) * Math.PI);
+        const bcNorm = Math.min(1.0, (bcPressure - 42) / 280);
+        shoeVol = 0.032 * spdWindow * bcNorm;
+      }
+      this.shoeGain.gain.setTargetAtTime(shoeVol, now, 0.05);
+      this.shoeFilter.frequency.setTargetAtTime(1850 + speedKmh * 65, now, 0.06);
+    }
+
+    // 7. 床下CP（電動空気圧縮機）ヒステリシス自動稼働音（805 kPa未満でON → 875 kPa回復でOFF）
+    if (this.cpGain) {
+      if (!this._cpRunning && mrPressure < 805) this._cpRunning = true;
+      else if (this._cpRunning && mrPressure >= 875) this._cpRunning = false;
+      this.cpGain.gain.setTargetAtTime(this._cpRunning ? 0.022 : 0.0, now, 0.22);
+    }
+  }
+
+  /**
+   * 運転台トグルスイッチ・ロータリースイッチ操作音（「パチッ」）
+   */
+  playSwitchClick() {
+    if (!this.isInitialized || !this.ctx || this.isMuted) return;
+    const now = this.ctx.currentTime;
+    const src = this.ctx.createBufferSource();
+    src.buffer = this._noiseBuffer;
+    const bp = this.ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = 3100;
+    bp.Q.value = 3.2;
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.11, now);
+    g.gain.exponentialRampToValueAtTime(0.0008, now + 0.012);
+    src.connect(bp);
+    bp.connect(g);
+    g.connect(this.uiSfxGain);
+    src.start(now, Math.random() * 0.5, 0.02);
   }
 
   /**

@@ -14,9 +14,11 @@ const WORLD_UP = new THREE.Vector3(0, 1, 0);
  * - 左手片持ちT字ワンハンドルマスコン ＋ 6自由度キャブ揺れ ＋ 前照灯ハイ/ロービーム ＋ 雨天ワイパーシステム
  */
 export class DriverCabView {
-  constructor(scene, camera) {
+  constructor(scene, camera, route = null, rollingStock = null) {
     this.scene = scene;
     this.camera = camera;
+    this.route = route;
+    this.rollingStock = rollingStock;
 
     this.trainRoot = new THREE.Group();
     this.scene.add(this.trainRoot);
@@ -26,6 +28,18 @@ export class DriverCabView {
 
     this.cabInterior = new THREE.Group();
     this.bodyRig.add(this.cabInterior);
+
+    // 自列車（E531系0番台 K409編成 10両フル編成：4・5号車サロE531 2階建てグリーン車連結）の3D実体！
+    this.playerConsistGroup = new THREE.Group();
+    this.scene.add(this.playerConsistGroup);
+    this.playerCars = null;
+    if (this.rollingStock) {
+      this.playerCars = this.rollingStock.createConsist(this.playerConsistGroup, {
+        series: 'E531',
+        cars: 10,
+        headlightsOn: true,
+      });
+    }
 
     // E531系 左側運転士アイポイント
     this.eyeHolder = new THREE.Group();
@@ -37,6 +51,8 @@ export class DriverCabView {
     this.lookYawOffset = 0;
     this.lookPitchOffset = 0;
     this.viewMode = 'cab';
+    this.isSpectator = false;
+    this._lastServiceType = null;
 
     // 6自由度 空気バネ＆台車継目・分岐器・曲線遠心力サスペンション状態
     this.suspX = 0;
@@ -68,6 +84,7 @@ export class DriverCabView {
     this._panelTimer = 1.0;
 
     this._buildE531CabInterior();
+    this._buildE531Cab360AndCar1Saloon();
     this._buildWindshieldWiperAndRain();
     this._buildHeadlight();
     this._applyViewMode();
@@ -79,21 +96,45 @@ export class DriverCabView {
     return this.viewMode;
   }
 
+  setSpectatorMode(active) {
+    this.isSpectator = Boolean(active);
+    this._applyViewMode();
+  }
+
   _applyViewMode() {
+    if (this.isSpectator) {
+      // ザ・ワールド（自由視点）中は外装のクハE531先頭1号車も表示し、10両フル編成の外観を360°鑑賞可能！
+      this.cabInterior.visible = false;
+      if (this.playerCars && this.playerCars[0]) {
+        this.playerCars[0].visible = true;
+      }
+      return;
+    }
+
+    // 一人称視点中は1号車外装の不透明黒ガラスマスクを隠し、2〜10号車の実体と1号車中空ボディ＆客室を表示！
+    if (this.playerCars && this.playerCars[0]) {
+      this.playerCars[0].visible = false;
+    }
+
     if (this.viewMode === 'cab') {
       this.cabInterior.visible = true;
       this.eyeHolder.position.set(-0.55, 2.365, 0.29);
       this.basePitch = -0.142;
     } else {
       this.cabInterior.visible = false;
-      this.eyeHolder.position.set(0.0, 2.42, -0.85);
+      this.eyeHolder.position.set(0.0, 2.42, -1.04);
       this.basePitch = -0.02;
     }
   }
 
+  /**
+   * 水平方向 360° エンドレス全周見回し ＆ 上下広角チルト（足元ペダル・運転士椅子〜天井サンバイザーまで！）
+   */
   addLookOffset(dYaw, dPitch) {
-    this.lookYawOffset = THREE.MathUtils.clamp(this.lookYawOffset + dYaw, -0.56, 0.56);
-    this.lookPitchOffset = THREE.MathUtils.clamp(this.lookPitchOffset + dPitch, -0.36, 0.28);
+    this.lookYawOffset += dYaw;
+    while (this.lookYawOffset > Math.PI) this.lookYawOffset -= Math.PI * 2;
+    while (this.lookYawOffset < -Math.PI) this.lookYawOffset += Math.PI * 2;
+    this.lookPitchOffset = THREE.MathUtils.clamp(this.lookPitchOffset + dPitch, -1.18, 1.12);
   }
 
   resetLookOffset() {
@@ -163,39 +204,39 @@ export class DriverCabView {
   }
 
   _buildE531CabInterior() {
-    // E531系 実車インテリアマテリアル
+    // E531系 実車インテリア共有マテリアル
     const upperConsoleMat = new THREE.MeshStandardMaterial({
-      color: 0x262a2f, // 上部ダークチャコールコンソール
-      roughness: 0.68,
-      metalness: 0.16,
-      envMapIntensity: 0.4,
+      color: 0x262a2f,
+      roughness: 0.66,
+      metalness: 0.18,
+      envMapIntensity: 0.45,
     });
     const hoodLipMat = new THREE.MeshStandardMaterial({
-      color: 0x1b1e23, // 最上部遮光ひさしリップ
-      roughness: 0.58,
-      metalness: 0.22,
+      color: 0x181b20,
+      roughness: 0.56,
+      metalness: 0.24,
     });
     const deskGreyMat = new THREE.MeshStandardMaterial({
-      color: 0xa4abac, // E531系特有の明るいウォームグレーデスク天板！
-      roughness: 0.48,
+      color: 0xa4abac,
+      roughness: 0.46,
       metalness: 0.12,
       envMapIntensity: 0.65,
     });
     const wallLightMat = new THREE.MeshStandardMaterial({
-      color: 0xcfd6da, // 運転室側壁のアイボリーホワイト内張り
-      roughness: 0.55,
+      color: 0xd0d7db,
+      roughness: 0.56,
       metalness: 0.08,
     });
     const leatherPadMat = new THREE.MeshStandardMaterial({
-      color: 0x181a1d, // 黒革アームレスト・グリップ
-      roughness: 0.44,
+      color: 0x181a1d,
+      roughness: 0.42,
       metalness: 0.18,
     });
     const chromeMat = new THREE.MeshStandardMaterial({
-      color: 0xd8dfe6, // 銀メッキボタン・懐中時計ベゼル
-      roughness: 0.16,
+      color: 0xdbe2e9,
+      roughness: 0.15,
       metalness: 0.94,
-      envMapIntensity: 1.4,
+      envMapIntensity: 1.45,
     });
     const emergencyRedMat = new THREE.MeshStandardMaterial({
       color: 0xd62c2c,
@@ -204,15 +245,33 @@ export class DriverCabView {
       emissive: new THREE.Color(0x450808),
     });
 
-    // ---- 1. 下段ライトグレーデスクテーブル ＆ 左手黒革アームレスト ----
+    this._cabMats = {
+      upperConsoleMat,
+      hoodLipMat,
+      deskGreyMat,
+      wallLightMat,
+      leatherPadMat,
+      chromeMat,
+      emergencyRedMat,
+    };
+
+    // ---- 1. 下段ライトグレーデスクテーブル・脚台・左手黒革アームレスト ----
     const lowerPedestal = new THREE.Mesh(
-      new THREE.BoxGeometry(2.76, 0.56, 0.74),
-      new THREE.MeshStandardMaterial({ color: 0x3b4046, roughness: 0.7 })
+      new THREE.BoxGeometry(2.72, 0.58, 0.72),
+      new THREE.MeshStandardMaterial({ color: 0x383d44, roughness: 0.68, metalness: 0.15 })
     );
     lowerPedestal.position.set(0, 1.56, -0.56);
     this.cabInterior.add(lowerPedestal);
 
-    const deskTable = new THREE.Mesh(new THREE.BoxGeometry(2.74, 0.055, 0.56), deskGreyMat);
+    // 運転士膝元のニーリセス（足入れ空間）
+    const kneeRecess = new THREE.Mesh(
+      new THREE.BoxGeometry(0.62, 0.52, 0.34),
+      new THREE.MeshStandardMaterial({ color: 0x1d2126, roughness: 0.8 })
+    );
+    kneeRecess.position.set(-0.54, 1.54, -0.35);
+    this.cabInterior.add(kneeRecess);
+
+    const deskTable = new THREE.Mesh(new THREE.BoxGeometry(2.72, 0.055, 0.56), deskGreyMat);
     deskTable.position.set(0, 1.862, -0.47);
     deskTable.receiveShadow = true;
     this.cabInterior.add(deskTable);
@@ -240,21 +299,43 @@ export class DriverCabView {
     leftWedge.rotation.x = 0.38;
     this.cabInterior.add(leftWedge);
 
-    // ---- 2. 上段ダークチャコール傾斜コンソール筐体 ----
-    const consoleBack = new THREE.Mesh(new THREE.BoxGeometry(2.74, 0.33, 0.22), upperConsoleMat);
+    // ---- 2. 上段ダークチャコール傾斜コンソール筐体 ＋ デフロスタ吹き出しルーバー ----
+    const consoleBack = new THREE.Mesh(new THREE.BoxGeometry(2.70, 0.33, 0.24), upperConsoleMat);
     consoleBack.position.set(0, 2.025, -0.88);
     consoleBack.rotation.x = -0.36;
     consoleBack.receiveShadow = true;
     this.cabInterior.add(consoleBack);
 
-    const visorLip = new THREE.Mesh(new THREE.BoxGeometry(2.76, 0.028, 0.14), hoodLipMat);
+    const visorLip = new THREE.Mesh(new THREE.BoxGeometry(2.72, 0.028, 0.15), hoodLipMat);
     visorLip.position.set(0, 2.192, -0.79);
     visorLip.rotation.x = 0.04;
     visorLip.castShadow = true;
     visorLip.receiveShadow = true;
     this.cabInterior.add(visorLip);
 
-    // ---- 3. 高精細 E531系 コンソールフェイス Canvas ----
+    // フロントガラス下端のデフロスタ送風グリル（細スリット造形）
+    for (let gx = -0.92; gx <= 1.08; gx += 0.34) {
+      const defGrille = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.008, 0.045), leatherPadMat);
+      defGrille.position.set(gx, 2.13, -0.885);
+      this.cabInterior.add(defGrille);
+    }
+
+    // 助士席正面のステンレス横握り棒（実車E531助士席前カウルの安全手すり！）
+    const assistGrabBar = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.013, 0.013, 0.62, 14),
+      chromeMat
+    );
+    assistGrabBar.rotation.z = Math.PI / 2;
+    assistGrabBar.position.set(0.84, 2.05, -0.68);
+    this.cabInterior.add(assistGrabBar);
+    for (const ax of [0.56, 1.12]) {
+      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.011, 0.08, 10), chromeMat);
+      post.rotation.x = Math.PI / 2;
+      post.position.set(ax, 2.05, -0.72);
+      this.cabInterior.add(post);
+    }
+
+    // ---- 3. 高精細 E531系 コンソールフェイス Canvas（白飛びゼロで懐中時計の針までくっきり！） ----
     this.panelCanvas = document.createElement('canvas');
     this.panelCanvas.width = 2048;
     this.panelCanvas.height = 440;
@@ -267,8 +348,8 @@ export class DriverCabView {
       map: this.panelTex,
       emissive: new THREE.Color(0xffffff),
       emissiveMap: this.panelTex,
-      emissiveIntensity: 0.95,
-      roughness: 0.32,
+      emissiveIntensity: 0.74,
+      roughness: 0.30,
       metalness: 0.12,
     });
     const fasciaMesh = new THREE.Mesh(new THREE.PlaneGeometry(1.48, 0.318), fasciaMat);
@@ -302,16 +383,21 @@ export class DriverCabView {
     lampHood.rotation.z = Math.PI / 2;
     slopeGroup.add(lampHood);
 
+    // 懐中時計の文字盤を白飛びさせない自然な電球色フィラメント
     const watchBulbMat = new THREE.MeshBasicMaterial({
-      color: new THREE.Color(3.8, 2.1, 0.55),
+      color: new THREE.Color(0.92, 0.58, 0.22),
     });
-    const watchBulb = new THREE.Mesh(new THREE.SphereGeometry(0.010, 10, 8), watchBulbMat);
-    watchBulb.position.set(-0.223, -0.022, 0.014);
+    const watchBulb = new THREE.Mesh(new THREE.SphereGeometry(0.009, 10, 8), watchBulbMat);
+    watchBulb.position.set(-0.223, -0.022, 0.013);
     slopeGroup.add(watchBulb);
 
-    const watchRing = new THREE.Mesh(new THREE.TorusGeometry(0.0345, 0.0042, 10, 24), chromeMat);
+    const watchRing = new THREE.Mesh(new THREE.TorusGeometry(0.0345, 0.0045, 12, 28), chromeMat);
     watchRing.position.set(-0.223, -0.068, 0.007);
     slopeGroup.add(watchRing);
+    // 懐中時計リューズ（竜頭）＆ボウ環
+    const watchCrown = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.004, 0.010, 10), chromeMat);
+    watchCrown.position.set(-0.223, -0.029, 0.008);
+    slopeGroup.add(watchCrown);
 
     const cord = new THREE.Mesh(new THREE.CylinderGeometry(0.003, 0.003, 0.12, 6), leatherPadMat);
     cord.position.set(-0.182, -0.062, 0.011);
@@ -333,6 +419,41 @@ export class DriverCabView {
     dimmerKnob.rotation.x = Math.PI / 2;
     dimmerKnob.position.set(0.386, -0.102, 0.012);
     slopeGroup.add(dimmerKnob);
+
+    // ---- 4B. 3D 運転士携帯時刻表「スタフ挿し」（照明フード付き・実物ダイヤ表記！） ----
+    this.staffCanvas = document.createElement('canvas');
+    this.staffCanvas.width = 384;
+    this.staffCanvas.height = 512;
+    this.staffCtx = this.staffCanvas.getContext('2d');
+    this.staffTex = new THREE.CanvasTexture(this.staffCanvas);
+    this.staffTex.colorSpace = THREE.SRGBColorSpace;
+    this._redrawStaffCard('rapid');
+
+    const staffGroup = new THREE.Group();
+    staffGroup.position.set(0.54, 2.045, -0.68);
+    staffGroup.rotation.order = 'YXZ';
+    staffGroup.rotation.y = -0.26;
+    staffGroup.rotation.x = -0.34;
+    this.cabInterior.add(staffGroup);
+
+    const staffFrame = new THREE.Mesh(new THREE.BoxGeometry(0.168, 0.224, 0.012), deskGreyMat);
+    staffGroup.add(staffFrame);
+    const staffFace = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.152, 0.204),
+      new THREE.MeshStandardMaterial({
+        map: this.staffTex,
+        emissive: new THREE.Color(0xffeed0),
+        emissiveMap: this.staffTex,
+        emissiveIntensity: 0.12,
+        roughness: 0.88,
+      })
+    );
+    staffFace.position.set(0, 0, 0.007);
+    staffGroup.add(staffFace);
+
+    const staffLampHood = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.018, 0.028), hoodLipMat);
+    staffLampHood.position.set(0, 0.114, 0.014);
+    staffGroup.add(staffLampHood);
 
     // ---- 5A. 左手操作ワンハンドル主幹制御器（マスコン） ----
     const masconTopPlate = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.012, 0.27), hoodLipMat);
@@ -397,7 +518,7 @@ export class DriverCabView {
     unlockBtn.position.set(0.032, 0.126, 0);
     this.masconPivot.add(unlockBtn);
 
-    // ---- 5B. 中央の固定式 右手用握り棒 ----
+    // ---- 5B. 中央の固定式 右手用握り棒 ＆ EBリセットボタン ----
     const grabGroup = new THREE.Group();
     grabGroup.position.set(-0.47, 1.882, -0.41);
     this.cabInterior.add(grabGroup);
@@ -427,6 +548,14 @@ export class DriverCabView {
     hillStartCap.position.set(0.022, 0.098, 0);
     grabGroup.add(hillStartCap);
 
+    // 黄色ベゼル付き EBリセット押しボタン
+    const ebResetRing = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.014, 0.015, 0.010, 14),
+      new THREE.MeshStandardMaterial({ color: 0xe8b923, roughness: 0.35 })
+    );
+    ebResetRing.position.set(-0.36, 1.915, -0.45);
+    this.cabInterior.add(ebResetRing);
+
     const miniIndCols = [0x1e5aa8, 0xeef2f6, 0xc93232];
     miniIndCols.forEach((col, i) => {
       const ind = new THREE.Mesh(
@@ -440,7 +569,7 @@ export class DriverCabView {
     midSwitchBlock.position.set(-0.36, 1.898, -0.45);
     this.cabInterior.add(midSwitchBlock);
 
-    // ---- 6. 右側の一段高いライトグレースイッチボックス ＋ 白い受話器 ----
+    // ---- 6. 右側の一段高いライトグレースイッチボックス ＋ 白いデジタル列車無線受話器 ----
     const rightConsole = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.068, 0.36), deskGreyMat);
     rightConsole.position.set(-0.05, 1.902, -0.41);
     rightConsole.rotation.x = 0.06;
@@ -448,7 +577,7 @@ export class DriverCabView {
     this.cabInterior.add(rightConsole);
 
     this.greenSwitchMat = new THREE.MeshBasicMaterial({
-      color: new THREE.Color(0.15, 2.8, 0.65),
+      color: new THREE.Color(0.14, 1.65, 0.48),
     });
     const greenLampBtn = new THREE.Mesh(
       new THREE.BoxGeometry(0.040, 0.016, 0.030),
@@ -457,12 +586,17 @@ export class DriverCabView {
     greenLampBtn.position.set(-0.17, 1.943, -0.49);
     this.cabInterior.add(greenLampBtn);
 
-    for (const tx of [-0.20, -0.15]) {
-      const tog = new THREE.Mesh(new THREE.BoxGeometry(0.010, 0.034, 0.014), leatherPadMat);
-      tog.position.set(tx, 1.946, -0.43);
-      tog.rotation.x = -0.25;
-      this.cabInterior.add(tog);
-    }
+    // 前照灯減光トグル ＆ 耐雪ブレーキトグル（キー操作と連動して角度が変わる！）
+    this.beamToggleMesh = new THREE.Mesh(new THREE.BoxGeometry(0.010, 0.034, 0.014), leatherPadMat);
+    this.beamToggleMesh.position.set(-0.20, 1.946, -0.43);
+    this.beamToggleMesh.rotation.x = -0.28;
+    this.cabInterior.add(this.beamToggleMesh);
+
+    this.snowToggleMesh = new THREE.Mesh(new THREE.BoxGeometry(0.010, 0.034, 0.014), leatherPadMat);
+    this.snowToggleMesh.position.set(-0.15, 1.946, -0.43);
+    this.snowToggleMesh.rotation.x = 0.22;
+    this.cabInterior.add(this.snowToggleMesh);
+
     const whiteKnob = new THREE.Mesh(new THREE.BoxGeometry(0.016, 0.026, 0.016), wallLightMat);
     whiteKnob.position.set(-0.10, 1.944, -0.43);
     this.cabInterior.add(whiteKnob);
@@ -476,14 +610,15 @@ export class DriverCabView {
       this.cabInterior.add(btnRing);
     }
 
-    const reverserKnob = new THREE.Mesh(
+    // ワイパーロータリースイッチ（YキーON/OFFと連動回転！）
+    this.wiperKnobMesh = new THREE.Mesh(
       new THREE.CylinderGeometry(0.018, 0.014, 0.042, 12),
       leatherPadMat
     );
-    reverserKnob.position.set(-0.02, 1.955, -0.49);
-    this.cabInterior.add(reverserKnob);
+    this.wiperKnobMesh.position.set(-0.02, 1.955, -0.49);
+    this.cabInterior.add(this.wiperKnobMesh);
 
-    const phoneCradleMat = new THREE.MeshStandardMaterial({ color: 0xdadbd4, roughness: 0.42 });
+    const phoneCradleMat = new THREE.MeshStandardMaterial({ color: 0xb2b6bc, roughness: 0.65 });
     const phoneBase = new THREE.Mesh(new THREE.BoxGeometry(0.095, 0.055, 0.19), phoneCradleMat);
     phoneBase.position.set(0.22, 1.945, -0.38);
     phoneBase.rotation.x = 0.18;
@@ -496,61 +631,106 @@ export class DriverCabView {
     phoneHandset.rotation.y = 0.12;
     this.cabInterior.add(phoneHandset);
 
-    // ---- 7. 左上小型モニタ・蛇腹配線ダクト・乗務員室窓・ピラー ----
+    // ---- 7. 左上 車上ITVホーム監視モニタ・赤色発炎筒・フロントピラー・アクリルサンバイザー ----
     const leftDeckUnit = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.068, 0.18), upperConsoleMat);
     leftDeckUnit.position.set(-1.05, 2.23, -0.82);
-    leftDeckUnit.rotation.y = 0.22;
+    leftDeckUnit.rotation.y = 0.26;
     this.cabInterior.add(leftDeckUnit);
 
-    const leftMiniMon = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.135, 0.045), hoodLipMat);
-    leftMiniMon.position.set(-1.05, 2.335, -0.82);
-    leftMiniMon.rotation.y = 0.24;
+    const leftMiniMon = new THREE.Mesh(new THREE.BoxGeometry(0.175, 0.142, 0.048), hoodLipMat);
+    leftMiniMon.position.set(-1.05, 2.34, -0.82);
+    leftMiniMon.rotation.y = 0.28;
     this.cabInterior.add(leftMiniMon);
 
+    // 車上ITV画面（駅ホーム進入・停車時にホーム監視カメラ映像を表示！）
+    this.itvCanvas = document.createElement('canvas');
+    this.itvCanvas.width = 256;
+    this.itvCanvas.height = 192;
+    this.itvCtx = this.itvCanvas.getContext('2d');
+    this.itvTex = new THREE.CanvasTexture(this.itvCanvas);
+    this.itvTex.colorSpace = THREE.SRGBColorSpace;
+    this._itvLastActive = null;
+    this._redrawCabItvScreen(true);
+
+    const itvScreen = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.152, 0.114),
+      new THREE.MeshBasicMaterial({ map: this.itvTex })
+    );
+    itvScreen.position.set(0, 0, 0.025);
+    leftMiniMon.add(itvScreen);
+
+    // 左Aピラー脇の赤色信号炎管・発炎筒（ホルダー固定）
+    const flareTube = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.016, 0.016, 0.21, 12),
+      emergencyRedMat
+    );
+    flareTube.position.set(-1.14, 2.13, -0.80);
+    this.cabInterior.add(flareTube);
+    const flareCap = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.018, 0.018, 0.026, 12),
+      wallLightMat
+    );
+    flareCap.position.set(-1.14, 2.24, -0.80);
+    this.cabInterior.add(flareCap);
+
     const conduitPipe = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.028, 0.028, 0.62, 10),
+      new THREE.CylinderGeometry(0.026, 0.026, 0.64, 10),
       leatherPadMat
     );
-    conduitPipe.position.set(-1.02, 2.66, -0.86);
-    conduitPipe.rotation.z = 0.18;
+    conduitPipe.position.set(-1.03, 2.67, -0.86);
+    conduitPipe.rotation.z = 0.16;
     this.cabInterior.add(conduitPipe);
 
-    const leftWallLower = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.68, 1.18), wallLightMat);
-    leftWallLower.position.set(-1.26, 1.95, -0.32);
-    this.cabInterior.add(leftWallLower);
-
-    const leftWallUpper = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.28, 1.18), wallLightMat);
-    leftWallUpper.position.set(-1.26, 2.90, -0.32);
-    this.cabInterior.add(leftWallUpper);
-
-    const sideWinSash = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.50, 0.78), hoodLipMat);
-    sideWinSash.position.set(-1.23, 2.52, -0.36);
-    sideWinSash.scale.set(1, 1, 0.04);
-    this.cabInterior.add(sideWinSash);
-
-    const cornerPillar = new THREE.Mesh(new THREE.BoxGeometry(0.055, 1.32, 0.065), wallLightMat);
+    const cornerPillar = new THREE.Mesh(new THREE.BoxGeometry(0.065, 1.32, 0.075), wallLightMat);
     cornerPillar.position.set(-1.08, 2.52, -0.88);
     cornerPillar.rotation.z = -0.035;
     cornerPillar.castShadow = true;
     this.cabInterior.add(cornerPillar);
 
-    const sashStrip = new THREE.Mesh(new THREE.BoxGeometry(0.018, 1.32, 0.07), hoodLipMat);
-    sashStrip.position.set(-1.048, 2.52, -0.885);
+    const sashStrip = new THREE.Mesh(new THREE.BoxGeometry(0.020, 1.32, 0.075), hoodLipMat);
+    sashStrip.position.set(-1.045, 2.52, -0.885);
     sashStrip.rotation.z = -0.035;
     this.cabInterior.add(sashStrip);
 
-    const rightPillar = new THREE.Mesh(new THREE.BoxGeometry(0.14, 1.38, 0.16), wallLightMat);
-    rightPillar.position.set(1.36, 2.50, -0.84);
-    rightPillar.rotation.z = 0.04;
+    const rightPillar = new THREE.Mesh(new THREE.BoxGeometry(0.11, 1.38, 0.12), wallLightMat);
+    rightPillar.position.set(1.35, 2.50, -0.86);
+    rightPillar.rotation.z = 0.035;
     this.cabInterior.add(rightPillar);
 
-    const ceiling = new THREE.Mesh(new THREE.BoxGeometry(2.9, 0.22, 1.25), wallLightMat);
-    ceiling.position.set(0, 3.04, -0.45);
-    ceiling.castShadow = true;
-    this.cabInterior.add(ceiling);
+    // 頭上スライドレール付きグリーンスモーク・アクリルサンバイザー（運転席側＆助士席側）
+    const sunVisorAcrylicMat = new THREE.MeshBasicMaterial({
+      color: 0x0a382c,
+      transparent: true,
+      opacity: 0.56,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    const visorSlideRod = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.005, 0.005, 2.28, 8),
+      chromeMat
+    );
+    visorSlideRod.rotation.z = Math.PI / 2;
+    visorSlideRod.position.set(0.14, 2.94, -0.84);
+    this.cabInterior.add(visorSlideRod);
 
-    const visorBracket = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.22, 0.04), deskGreyMat);
-    visorBracket.position.set(0.24, 2.86, -0.82);
+    const driverSunVisor = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.68, 0.15),
+      sunVisorAcrylicMat
+    );
+    driverSunVisor.position.set(-0.55, 2.88, -0.83);
+    driverSunVisor.rotation.x = 0.24;
+    this.cabInterior.add(driverSunVisor);
+
+    const assistSunVisor = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.68, 0.13),
+      sunVisorAcrylicMat
+    );
+    assistSunVisor.position.set(0.72, 2.91, -0.83);
+    assistSunVisor.rotation.x = 0.42;
+    this.cabInterior.add(assistSunVisor);
+
+    const visorBracket = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.18, 0.04), deskGreyMat);
+    visorBracket.position.set(0.14, 2.90, -0.83);
     this.cabInterior.add(visorBracket);
 
     // 上部遮光グラデーションフィルム（左右Aピラー x=-1.06..+1.34 の開口幅に厳密一致）
@@ -578,19 +758,876 @@ export class DriverCabView {
       envMapIntensity: 0.85,
       depthWrite: false,
     });
+    this._clearGlassMat = glassMat;
     const windshield = new THREE.Mesh(new THREE.PlaneGeometry(glassWidth, 0.96), glassMat);
     windshield.position.set(glassCenterX, 2.48, -0.91);
     this.cabInterior.add(windshield);
 
     // 運転室内環境フィルライト（懐中時計照明の暖色＋液晶照り返し）
-    this.cabFillLight = new THREE.PointLight(0xffdfb8, 0.32, 2.1);
-    this.cabFillLight.position.set(-0.56, 2.22, -0.48);
+    this.cabFillLight = new THREE.PointLight(0xffdfb8, 0.34, 2.8);
+    this.cabFillLight.position.set(-0.42, 2.35, -0.25);
     this.cabInterior.add(this.cabFillLight);
 
-    // 駅ホーム上屋進入時に運転台デスク・ピラーをふんわり照らす駅照明連動ライト！
-    this.stationCanopyLight = new THREE.PointLight(0xf3f7ff, 0.0, 4.8);
-    this.stationCanopyLight.position.set(-0.25, 2.78, -0.34);
+    // 駅ホーム上屋進入時に運転台デスク・ピラー・背面壁をふんわり照らす駅照明連動ライト！
+    this.stationCanopyLight = new THREE.PointLight(0xf3f7ff, 0.0, 5.4);
+    this.stationCanopyLight.position.set(0.0, 2.82, 0.05);
     this.cabInterior.add(this.stationCanopyLight);
+  }
+
+  /**
+   * 運転士携帯時刻表（スタフ）高精細描画（快速 1627H / 特別快速 3185M 自動切替）
+   */
+  _redrawStaffCard(serviceType = 'rapid') {
+    if (!this.staffCtx) return;
+    const ctx = this.staffCtx;
+    const W = 384;
+    const H = 512;
+    const isSpec = serviceType === 'special_rapid';
+
+    // 厚紙スタフの温かみのあるアイボリー白地（ブルーム閾値を超えない落ち着いたマット厚紙トーン）
+    ctx.fillStyle = '#d4cfc0';
+    ctx.fillRect(0, 0, W, H);
+
+    // 外枠罫線
+    ctx.strokeStyle = '#1c242b';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(14, 14, W - 28, H - 28);
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(20, 20, W - 40, H - 40);
+
+    // 上部ヘッダー（上野運輸区・列車番号・種別バッジ）
+    ctx.fillStyle = '#182028';
+    ctx.font = '700 15px "Noto Sans JP", sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('上野運輸区  仕業 24', 30, 46);
+
+    ctx.fillStyle = isSpec ? '#d63228' : '#008c4a';
+    ctx.fillRect(228, 28, 126, 28);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '800 16px "Noto Sans JP", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(isSpec ? '特別快速' : '常磐快速', 291, 48);
+
+    ctx.fillStyle = '#11161c';
+    ctx.font = '900 32px "JetBrains Mono", monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(isSpec ? '3185M' : '1627H', 30, 88);
+
+    ctx.font = '700 16px "Noto Sans JP", sans-serif';
+    ctx.fillText('E531系  15両 (K409+K459)', 152, 76);
+    ctx.font = '700 14px "Inter", sans-serif';
+    ctx.fillStyle = '#2d3a46';
+    ctx.fillText('最高 120 km/h   ATS-P', 152, 96);
+
+    ctx.strokeStyle = '#25303a';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(20, 108);
+    ctx.lineTo(W - 20, 108);
+    ctx.stroke();
+
+    // カラム見出し
+    ctx.fillStyle = '#e5e1d3';
+    ctx.fillRect(22, 110, W - 44, 28);
+    ctx.fillStyle = '#182028';
+    ctx.font = '700 14px "Noto Sans JP", sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('停車場名', 32, 129);
+    ctx.fillText('着時刻', 158, 129);
+    ctx.fillText('発・通', 246, 129);
+    ctx.fillText('番線', 322, 129);
+
+    const rows = isSpec
+      ? [
+          { st: '日 暮 里', arr: '17.03.30', dep: '17.04.00', trk: '4', pass: false },
+          { st: '三 河 島', arr: '   レ   ', dep: '17.05.35', trk: '1', pass: true },
+          { st: '南 千 住', arr: '   レ   ', dep: '17.07.15', trk: '1', pass: true },
+          { st: '北 千 住', arr: '17.09.15', dep: '17.10.00', trk: '1', pass: false },
+          { st: '松    戸', arr: '17.18.30', dep: '17.19.15', trk: '1', pass: false },
+        ]
+      : [
+          { st: '日 暮 里', arr: '17.03.30', dep: '17.04.00', trk: '4', pass: false },
+          { st: '三 河 島', arr: '17.06.15', dep: '17.06.45', trk: '1', pass: false },
+          { st: '南 千 住', arr: '17.09.00', dep: '17.09.30', trk: '1', pass: false },
+          { st: '北 千 住', arr: '17.11.45', dep: '17.12.30', trk: '1', pass: false },
+          { st: '松    戸', arr: '17.21.15', dep: '17.22.00', trk: '1', pass: false },
+        ];
+
+    rows.forEach((r, idx) => {
+      const y = 166 + idx * 54;
+      if (idx % 2 === 1) {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.035)';
+        ctx.fillRect(22, y - 24, W - 44, 52);
+      }
+      ctx.fillStyle = '#141a20';
+      ctx.font = '800 20px "Noto Sans JP", sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillText(r.st, 30, y + 6);
+
+      ctx.font = '700 17px "JetBrains Mono", monospace';
+      ctx.fillStyle = r.pass ? '#b02a24' : '#182028';
+      ctx.fillText(r.arr, 148, y + 6);
+      ctx.fillText(r.dep, 236, y + 6);
+
+      ctx.strokeStyle = '#25303a';
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(326, y - 14, 26, 26);
+      ctx.font = '800 16px "Inter", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(r.trk, 339, y + 5);
+    });
+
+    // 下部注意記事欄
+    ctx.strokeStyle = '#25303a';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(26, 424, W - 52, 58);
+    ctx.fillStyle = '#c92a24';
+    ctx.font = '800 14px "Noto Sans JP", sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('【記事】 日暮里〜三河島 R300 制限60km/h 厳守', 36, 446);
+    ctx.fillStyle = '#1d2630';
+    ctx.font = '700 13px "Noto Sans JP", sans-serif';
+    ctx.fillText('北千住 1番線進入 分岐器制限 45km/h  15両目標', 36, 469);
+
+    this.staffTex.needsUpdate = true;
+  }
+
+  /**
+   * 左ピラー車上ITV（ホーム監視モニタ）画面描画
+   */
+  _redrawCabItvScreen(active = true) {
+    if (!this.itvCtx) return;
+    const ctx = this.itvCtx;
+    const W = 256;
+    const H = 192;
+
+    if (!active) {
+      ctx.fillStyle = '#0c1014';
+      ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = '#3c4c5c';
+      ctx.font = '700 14px "Inter", sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('ITV STANDBY', W * 0.5, H * 0.52);
+      this.itvTex.needsUpdate = true;
+      return;
+    }
+
+    // 2分割ホーム監視カメラ映像風（1号車〜5号車 / 6号車〜15号車）
+    ctx.fillStyle = '#1b2430';
+    ctx.fillRect(0, 0, W, H);
+    for (let ch = 0; ch < 2; ch++) {
+      const ox = ch * 128;
+      // ホームアスファルト＆黄色点字ブロック＆ステンレス車両側面
+      ctx.fillStyle = '#363e4a';
+      ctx.fillRect(ox + 3, 22, 122, 164);
+      ctx.fillStyle = '#cbd4df';
+      ctx.fillRect(ox + 3, 22, 42, 164);
+      ctx.fillStyle = '#0056b0';
+      ctx.fillRect(ox + 32, 22, 8, 164);
+      ctx.fillStyle = '#e5be18';
+      ctx.fillRect(ox + 56, 22, 6, 164);
+      // 乗降客シルエット
+      ctx.fillStyle = '#1f2632';
+      ctx.fillRect(ox + 72, 64, 16, 26);
+      ctx.fillRect(ox + 76, 118, 15, 24);
+      // カメラCHラベル
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.65)';
+      ctx.fillRect(ox + 3, 4, 122, 18);
+      ctx.fillStyle = '#7eff9e';
+      ctx.font = '700 12px "JetBrains Mono", monospace';
+      ctx.textAlign = 'left';
+      ctx.fillText(`CAM ${ch + 1}  15C`, ox + 8, 17);
+    }
+    // 走査線ニュアンス
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.16)';
+    for (let y = 0; y < H; y += 4) ctx.fillRect(0, y, W, 1);
+    this.itvTex.needsUpdate = true;
+  }
+
+  /**
+   * 360°全周対応 E531系 運転台周囲（ノーズ外装縁・床・足踏み警笛・運転士椅子・左右側窓＆乗務員扉・車掌スイッチ・背面NFB配電盤＆仕切り壁）
+   * ＋ 仕切り窓越しに続く「1号車（クハE531）中空ボディ＆照明付きリアル客室空間（青モケット座席・荷棚・つり革・貫通扉）」！
+   */
+  _buildE531Cab360AndCar1Saloon() {
+    const {
+      upperConsoleMat,
+      hoodLipMat,
+      deskGreyMat,
+      wallLightMat,
+      leatherPadMat,
+      chromeMat,
+      emergencyRedMat,
+    } = this._cabMats;
+
+    const stainlessInteriorMat = new THREE.MeshStandardMaterial({
+      color: 0xcfd7e0,
+      metalness: 0.78,
+      roughness: 0.28,
+      envMapIntensity: 1.1,
+    });
+    const extWhiteFrpMat = new THREE.MeshStandardMaterial({
+      color: 0xf0f4f8,
+      metalness: 0.14,
+      roughness: 0.26,
+    });
+    const extBlueBandMat = new THREE.MeshStandardMaterial({
+      color: 0x0056b0,
+      metalness: 0.12,
+      roughness: 0.36,
+    });
+    const floorRubberMat = new THREE.MeshStandardMaterial({
+      color: 0x23272d,
+      roughness: 0.84,
+      metalness: 0.08,
+    });
+    const seatBlueMoquetteMat = new THREE.MeshStandardMaterial({
+      color: 0x1c4680,
+      roughness: 0.82,
+      metalness: 0.04,
+    });
+
+    // =========================================================================
+    // A. フロントガラス外側の E531系 FRPノーズエプロン＆助士側ワイパー (z = -0.92 .. -1.16m)
+    // =========================================================================
+    const noseBlackSill = new THREE.Mesh(
+      new THREE.BoxGeometry(2.68, 0.09, 0.22),
+      hoodLipMat
+    );
+    noseBlackSill.position.set(0.08, 1.97, -1.03);
+    noseBlackSill.rotation.x = 0.12;
+    this.cabInterior.add(noseBlackSill);
+
+    const noseWhiteApron = new THREE.Mesh(
+      new THREE.BoxGeometry(2.74, 0.26, 0.18),
+      extWhiteFrpMat
+    );
+    noseWhiteApron.position.set(0.06, 1.80, -1.08);
+    noseWhiteApron.rotation.x = 0.18;
+    this.cabInterior.add(noseWhiteApron);
+
+    // 助士席側の外装サブワイパー（右隅にパーク待機）
+    const assistWiper = new THREE.Mesh(new THREE.BoxGeometry(0.014, 0.62, 0.014), hoodLipMat);
+    assistWiper.position.set(0.76, 2.30, -0.925);
+    assistWiper.rotation.z = -0.46;
+    this.cabInterior.add(assistWiper);
+
+    // =========================================================================
+    // B. 運転室フロア・足踏み警笛ペダル・運転士椅子・助士席折りたたみ補助椅子
+    // =========================================================================
+    const cabFloor = new THREE.Mesh(new THREE.BoxGeometry(2.78, 0.06, 1.92), floorRubberMat);
+    cabFloor.position.set(0, 1.26, 0.0);
+    cabFloor.receiveShadow = true;
+    this.cabInterior.add(cabFloor);
+
+    // 足元の縞目滑り止めステップ＆真鍮/鋼製「足踏み警笛ペダル」
+    const footRestPlate = new THREE.Mesh(
+      new THREE.BoxGeometry(0.38, 0.025, 0.26),
+      new THREE.MeshStandardMaterial({ color: 0x353b43, metalness: 0.45, roughness: 0.55 })
+    );
+    footRestPlate.position.set(-0.55, 1.30, -0.26);
+    footRestPlate.rotation.x = 0.16;
+    this.cabInterior.add(footRestPlate);
+
+    const hornPedal = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.018, 0.16), chromeMat);
+    hornPedal.position.set(-0.48, 1.345, -0.34);
+    hornPedal.rotation.x = 0.42;
+    this.cabInterior.add(hornPedal);
+
+    // E531系 空気バネダンパー式 運転士座席（下を向くと座面・肘掛け、後ろを振り向くと背もたれ＆ヘッドレストが見える！）
+    const seatGroup = new THREE.Group();
+    seatGroup.position.set(-0.55, 1.29, 0.36);
+    this.cabInterior.add(seatGroup);
+
+    const seatPedestal = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.085, 0.115, 0.28, 14),
+      leatherPadMat
+    );
+    seatPedestal.position.set(0, 0.14, 0.02);
+    seatGroup.add(seatPedestal);
+
+    const seatBaseFrame = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.05, 0.42), hoodLipMat);
+    seatBaseFrame.position.set(0, 0.29, 0.0);
+    seatGroup.add(seatBaseFrame);
+
+    // 高さ調整レバー
+    const seatAdjustLever = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.18, 8), chromeMat);
+    seatAdjustLever.rotation.z = Math.PI / 2;
+    seatAdjustLever.position.set(0.24, 0.28, -0.04);
+    seatGroup.add(seatAdjustLever);
+
+    // 青モケット座面クッション＋サイドサポート
+    const seatCushion = new THREE.Mesh(
+      new THREE.BoxGeometry(0.48, 0.095, 0.46),
+      seatBlueMoquetteMat
+    );
+    seatCushion.position.set(0, 0.35, -0.02);
+    seatGroup.add(seatCushion);
+
+    // 左右可動アームレスト
+    for (const ax of [-0.265, 0.265]) {
+      const armRest = new THREE.Mesh(new THREE.BoxGeometry(0.052, 0.042, 0.30), leatherPadMat);
+      armRest.position.set(ax, 0.56, 0.02);
+      seatGroup.add(armRest);
+      const armPost = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.20, 0.045), hoodLipMat);
+      armPost.position.set(ax, 0.45, 0.12);
+      seatGroup.add(armPost);
+    }
+
+    // 背もたれ＆ヘッドレスト（アイポイント y=2.365 より低い y=2.25 上端なので後方180°視界を遮らない絶妙設計！）
+    const seatBack = new THREE.Mesh(
+      new THREE.BoxGeometry(0.46, 0.48, 0.095),
+      seatBlueMoquetteMat
+    );
+    seatBack.position.set(0, 0.62, 0.21);
+    seatBack.rotation.x = -0.10;
+    seatGroup.add(seatBack);
+
+    const headRest = new THREE.Mesh(
+      new THREE.BoxGeometry(0.26, 0.14, 0.075),
+      seatBlueMoquetteMat
+    );
+    headRest.position.set(0, 0.90, 0.24);
+    headRest.rotation.x = -0.08;
+    seatGroup.add(headRest);
+
+    // 助士席側の折りたたみ補助椅子（右壁際 x=+0.95, z=+0.36）
+    const assistSeatCushion = new THREE.Mesh(
+      new THREE.BoxGeometry(0.38, 0.065, 0.34),
+      seatBlueMoquetteMat
+    );
+    assistSeatCushion.position.set(0.92, 1.62, 0.36);
+    this.cabInterior.add(assistSeatCushion);
+    const assistSeatLegs = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.32, 0.04), hoodLipMat);
+    assistSeatLegs.position.set(0.92, 1.45, 0.50);
+    this.cabInterior.add(assistSeatLegs);
+
+    // =========================================================================
+    // C. 左右の乗務員室側壁（実開口の乗務員室下降窓 ＋ 乗務員扉＆扉窓 ＋ 車掌スイッチ箱）
+    // =========================================================================
+    for (const side of [-1, 1]) {
+      const wx = side * 1.35; // -1.35 (左・運転士側), +1.35 (右・助士席側)
+
+      // 1. 前部斜めチーク繋ぎ壁（フロントピラー〜側壁前端 z=-0.90..-0.76）
+      if (side < 0) {
+        const leftCheek = new THREE.Mesh(new THREE.BoxGeometry(0.06, 1.78, 0.32), wallLightMat);
+        leftCheek.position.set(-1.21, 2.18, -0.82);
+        leftCheek.rotation.y = 0.72;
+        this.cabInterior.add(leftCheek);
+      } else {
+        const rightCheek = new THREE.Mesh(new THREE.BoxGeometry(0.06, 1.78, 0.18), wallLightMat);
+        rightCheek.position.set(1.36, 2.18, -0.82);
+        this.cabInterior.add(rightCheek);
+      }
+
+      // 2. 側窓下の腰壁 (z = -0.78 .. -0.14, y = 1.28 .. 2.02) ＆ 上部鴨居壁 (z = -0.78 .. +0.94, y = 2.82 .. 3.10)
+      const lowerSideWall = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.74, 0.66), wallLightMat);
+      lowerSideWall.position.set(wx, 1.65, -0.46);
+      this.cabInterior.add(lowerSideWall);
+
+      const upperSideHeader = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.28, 1.74), wallLightMat);
+      upperSideHeader.position.set(wx, 2.96, 0.08);
+      this.cabInterior.add(upperSideHeader);
+
+      // 3. 乗務員室側窓（実開口 z = -0.76 .. -0.18, y = 2.02 .. 2.82：2分割引き違いアルミサッシ＋つまみ付き！）
+      const sideWinFrameBot = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.03, 0.60), hoodLipMat);
+      sideWinFrameBot.position.set(wx, 2.025, -0.47);
+      this.cabInterior.add(sideWinFrameBot);
+
+      const sideWinCenterBar = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.80, 0.026), chromeMat);
+      sideWinCenterBar.position.set(wx, 2.42, -0.47);
+      this.cabInterior.add(sideWinCenterBar);
+
+      const sideWinLatch = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.035, 0.04), chromeMat);
+      sideWinLatch.position.set(wx - side * 0.02, 2.07, -0.34);
+      this.cabInterior.add(sideWinLatch);
+
+      const sideGlass = new THREE.Mesh(new THREE.PlaneGeometry(0.58, 0.78), this._clearGlassMat);
+      sideGlass.rotation.y = side < 0 ? Math.PI / 2 : -Math.PI / 2;
+      sideGlass.position.set(wx, 2.42, -0.47);
+      this.cabInterior.add(sideGlass);
+
+      // 側窓と乗務員扉の間の縦柱 (z = -0.18 .. -0.08)
+      const midPillar = new THREE.Mesh(new THREE.BoxGeometry(0.08, 1.56, 0.11), wallLightMat);
+      midPillar.position.set(wx, 2.06, -0.13);
+      this.cabInterior.add(midPillar);
+
+      // 4. 乗務員扉（一段外側に窪んだステンレス扉 z = -0.08 .. +0.44、上部 z = +0.02..+0.34 は本物の透明扉窓！）
+      const doorX = wx + side * 0.035;
+      const crewDoorLower = new THREE.Mesh(
+        new THREE.BoxGeometry(0.05, 0.82, 0.52),
+        stainlessInteriorMat
+      );
+      crewDoorLower.position.set(doorX, 1.69, 0.18);
+      this.cabInterior.add(crewDoorLower);
+
+      const crewDoorTop = new THREE.Mesh(
+        new THREE.BoxGeometry(0.05, 0.12, 0.52),
+        stainlessInteriorMat
+      );
+      crewDoorTop.position.set(doorX, 2.78, 0.18);
+      this.cabInterior.add(crewDoorTop);
+
+      for (const dz of [-0.03, 0.39]) {
+        const doorStile = new THREE.Mesh(
+          new THREE.BoxGeometry(0.05, 0.64, 0.10),
+          stainlessInteriorMat
+        );
+        doorStile.position.set(doorX, 2.41, dz);
+        this.cabInterior.add(doorStile);
+      }
+
+      const crewDoorGlass = new THREE.Mesh(new THREE.PlaneGeometry(0.32, 0.62), this._clearGlassMat);
+      crewDoorGlass.rotation.y = side < 0 ? Math.PI / 2 : -Math.PI / 2;
+      crewDoorGlass.position.set(doorX, 2.41, 0.18);
+      this.cabInterior.add(crewDoorGlass);
+
+      // 乗務員扉の内側縦手すり＆開閉ラッチレバー
+      const doorGrab = new THREE.Mesh(new THREE.CylinderGeometry(0.010, 0.010, 0.54, 8), chromeMat);
+      doorGrab.position.set(wx - side * 0.01, 2.06, -0.05);
+      this.cabInterior.add(doorGrab);
+
+      const doorLatch = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.09, 0.03), chromeMat);
+      doorLatch.position.set(doorX - side * 0.03, 1.98, 0.38);
+      this.cabInterior.add(doorLatch);
+
+      // 外板のコバルトブルー腰帯（窓から斜め外を見たときにE531の青い帯と銀車体がチラリと見える！）
+      const extBelt = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.34, 1.72), extBlueBandMat);
+      extBelt.position.set(wx + side * 0.065, 1.68, 0.06);
+      this.cabInterior.add(extBelt);
+
+      // 5. 後部側壁 (z = +0.44 .. +0.94) ＆ 壁付け「車掌スイッチユニット（開・閉ボタン＋合図ブザー）」
+      const rearSideWall = new THREE.Mesh(new THREE.BoxGeometry(0.08, 1.56, 0.50), wallLightMat);
+      rearSideWall.position.set(wx, 2.06, 0.69);
+      this.cabInterior.add(rearSideWall);
+
+      const condBox = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.36, 0.22), deskGreyMat);
+      condBox.position.set(wx - side * 0.06, 2.12, 0.68);
+      this.cabInterior.add(condBox);
+
+      // 車掌スイッチの赤「開」ガードボタン・黒「閉」ボタン・ブザー釦
+      const openBtn = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.02, 10), emergencyRedMat);
+      openBtn.rotation.z = Math.PI / 2;
+      openBtn.position.set(wx - side * 0.11, 2.19, 0.64);
+      this.cabInterior.add(openBtn);
+
+      const closeBtn = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.02, 10), leatherPadMat);
+      closeBtn.rotation.z = Math.PI / 2;
+      closeBtn.position.set(wx - side * 0.11, 2.09, 0.64);
+      this.cabInterior.add(closeBtn);
+
+      const buzBtn = new THREE.Mesh(new THREE.CylinderGeometry(0.010, 0.010, 0.018, 10), chromeMat);
+      buzBtn.rotation.z = Math.PI / 2;
+      buzBtn.position.set(wx - side * 0.11, 2.01, 0.72);
+      this.cabInterior.add(buzBtn);
+
+      // 右側（助士側）には車内放送用ハンドマイクも設置！
+      if (side > 0) {
+        const paMic = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.11, 0.055), leatherPadMat);
+        paMic.position.set(wx - 0.11, 2.34, 0.72);
+        this.cabInterior.add(paMic);
+      }
+    }
+
+    // =========================================================================
+    // D. 運転室天井（全体カバー z = -0.94 .. +0.96, 乗務員室灯・丸型空調ルーバー・無線スピーカー）
+    // =========================================================================
+    const fullCeiling = new THREE.Mesh(new THREE.BoxGeometry(2.82, 0.14, 1.92), wallLightMat);
+    fullCeiling.position.set(0, 3.12, 0.0);
+    fullCeiling.castShadow = true;
+    this.cabInterior.add(fullCeiling);
+
+    // 天井埋め込み乗務員室LED照明カバー
+    const cabCeilLampFrame = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.02, 0.22), deskGreyMat);
+    cabCeilLampFrame.position.set(-0.25, 3.045, 0.12);
+    this.cabInterior.add(cabCeilLampFrame);
+    const cabCeilLampDiffuser = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.40, 0.16),
+      new THREE.MeshBasicMaterial({ color: 0xeef3f8 })
+    );
+    cabCeilLampDiffuser.rotation.x = Math.PI / 2;
+    cabCeilLampDiffuser.position.set(-0.25, 3.034, 0.12);
+    this.cabInterior.add(cabCeilLampDiffuser);
+
+    // 丸型空調吹出口ルーバー × 2 ＆ 天井モニタスピーカー
+    for (const lx of [-0.62, 0.62]) {
+      const acVent = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.085, 0.018, 16), hoodLipMat);
+      acVent.position.set(lx, 3.045, -0.22);
+      this.cabInterior.add(acVent);
+    }
+
+    // =========================================================================
+    // E. 乗務員室背面仕切り壁 (z = +0.94m) — 3スパン実開口構造（NFB配電盤・消火器・仕切扉窓・助士側大窓）
+    // =========================================================================
+    const bulkZ = 0.93;
+
+    // E-1. 運転士背後ベイ (x = -1.36 .. -0.26)：下部キャビネット＋消火器・中段遮光幕付き小窓・上段NFB配電盤！
+    const rearLeftLower = new THREE.Mesh(new THREE.BoxGeometry(1.10, 0.68, 0.07), wallLightMat);
+    rearLeftLower.position.set(-0.81, 1.62, bulkZ);
+    this.cabInterior.add(rearLeftLower);
+
+    // 運転士背後小窓の両脇柱 (x = -1.36..-0.96, -0.44..-0.26, y = 1.96..2.52)
+    const rlStileOuter = new THREE.Mesh(new THREE.BoxGeometry(0.40, 0.56, 0.07), wallLightMat);
+    rlStileOuter.position.set(-1.16, 2.24, bulkZ);
+    this.cabInterior.add(rlStileOuter);
+    const rlStileInner = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.56, 0.07), wallLightMat);
+    rlStileInner.position.set(-0.35, 2.24, bulkZ);
+    this.cabInterior.add(rlStileInner);
+
+    // 運転士背後小窓の透明ガラス＋上部に少しだけ引き出されたダークグレー遮光ロール幕＆引き輪！
+    const rlGlass = new THREE.Mesh(new THREE.PlaneGeometry(0.52, 0.54), this._clearGlassMat);
+    rlGlass.rotation.y = Math.PI;
+    rlGlass.position.set(-0.70, 2.24, bulkZ);
+    this.cabInterior.add(rlGlass);
+
+    const nightShade = new THREE.Mesh(
+      new THREE.BoxGeometry(0.52, 0.09, 0.02),
+      new THREE.MeshStandardMaterial({ color: 0x222730, roughness: 0.85 })
+    );
+    nightShade.position.set(-0.70, 2.475, bulkZ - 0.01);
+    this.cabInterior.add(nightShade);
+    const shadeRing = new THREE.Mesh(new THREE.TorusGeometry(0.016, 0.003, 8, 16), chromeMat);
+    shadeRing.position.set(-0.70, 2.415, bulkZ - 0.02);
+    this.cabInterior.add(shadeRing);
+
+    // 上段：高精細 NFB（ノーヒューズブレーカー）配電盤＆ATS/TIMS継電器盤 (x = -1.32 .. -0.28, y = 2.52 .. 3.04)
+    const nfbCanvas = document.createElement('canvas');
+    nfbCanvas.width = 512;
+    nfbCanvas.height = 320;
+    const nCtx = nfbCanvas.getContext('2d');
+    nCtx.fillStyle = '#2c323a';
+    nCtx.fillRect(0, 0, 512, 320);
+    nCtx.strokeStyle = '#181c22';
+    nCtx.lineWidth = 6;
+    nCtx.strokeRect(10, 10, 492, 300);
+    // 「配電盤 NFB」銘板
+    nCtx.fillStyle = '#dde3ea';
+    nCtx.fillRect(28, 24, 118, 26);
+    nCtx.fillStyle = '#14181e';
+    nCtx.font = '800 15px "Noto Sans JP", sans-serif';
+    nCtx.textAlign = 'center';
+    nCtx.fillText('運転室配電盤', 87, 42);
+    // 2段×10列のリアルなNFBブレーカースイッチ群＋白ラベル
+    const nfbLabels = [
+      '主制御', 'ブレーキ', 'ATS-P', 'TIMS1', 'TIMS2', 'デジタル無線', '戸閉保安', 'EB装置', '前照灯', '標識灯',
+      '乗務員室灯', '計器灯', '放送装置', '車内表示', 'ワイパー', 'デフロスタ', '耐雪制動', 'パンタ制御', 'VCB制御', '予備1',
+    ];
+    for (let r = 0; r < 2; r++) {
+      for (let c = 0; c < 10; c++) {
+        const bx = 32 + c * 46;
+        const by = 72 + r * 98;
+        nCtx.fillStyle = '#cfd6de';
+        nCtx.fillRect(bx, by, 36, 15);
+        nCtx.fillStyle = '#15181c';
+        nCtx.font = '700 8px "Noto Sans JP", sans-serif';
+        nCtx.fillText(nfbLabels[r * 10 + c] || 'NFB', bx + 18, by + 11);
+        // 黒いブレーカー枠＆ON位置の白/赤トグルレバー
+        nCtx.fillStyle = '#13161a';
+        nCtx.fillRect(bx + 6, by + 19, 24, 48);
+        nCtx.fillStyle = c === 2 ? '#e64238' : '#d5dce4';
+        nCtx.fillRect(bx + 12, by + 26, 12, 14);
+      }
+    }
+    // 下段ステータスLED＆電圧測定端子
+    nCtx.fillStyle = '#1d2228';
+    nCtx.fillRect(28, 264, 456, 34);
+    for (let i = 0; i < 6; i++) {
+      nCtx.fillStyle = i < 4 ? '#32e875' : '#ffaa2b';
+      nCtx.beginPath();
+      nCtx.arc(58 + i * 38, 281, 5, 0, Math.PI * 2);
+      nCtx.fill();
+    }
+    const nfbTex = new THREE.CanvasTexture(nfbCanvas);
+    nfbTex.colorSpace = THREE.SRGBColorSpace;
+    const nfbBox = new THREE.Mesh(
+      new THREE.BoxGeometry(1.06, 0.52, 0.08),
+      new THREE.MeshStandardMaterial({ map: nfbTex, roughness: 0.52, metalness: 0.20 })
+    );
+    nfbBox.position.set(-0.80, 2.78, bulkZ - 0.01);
+    this.cabInterior.add(nfbBox);
+
+    // 壁掛け赤色 3D 消火器 (x = -0.38, y = 1.54, z = +0.85)
+    const extTank = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.055, 0.055, 0.36, 14),
+      emergencyRedMat
+    );
+    extTank.position.set(-0.38, 1.50, bulkZ - 0.075);
+    this.cabInterior.add(extTank);
+    const extNozzle = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.07, 0.05), leatherPadMat);
+    extNozzle.position.set(-0.38, 1.71, bulkZ - 0.075);
+    this.cabInterior.add(extNozzle);
+
+    // E-2. 中央ベイ：乗務員室仕切扉（x = -0.26 .. +0.38、中央 x=-0.14..+0.26, y=2.02..2.74 は本物の透明ガラス窓！）
+    const pDoorBot = new THREE.Mesh(new THREE.BoxGeometry(0.64, 0.74, 0.05), stainlessInteriorMat);
+    pDoorBot.position.set(0.06, 1.65, bulkZ - 0.01);
+    this.cabInterior.add(pDoorBot);
+    const pDoorTop = new THREE.Mesh(new THREE.BoxGeometry(0.64, 0.34, 0.05), stainlessInteriorMat);
+    pDoorTop.position.set(0.06, 2.91, bulkZ - 0.01);
+    this.cabInterior.add(pDoorTop);
+    const pDoorLeft = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.72, 0.05), stainlessInteriorMat);
+    pDoorLeft.position.set(-0.20, 2.38, bulkZ - 0.01);
+    this.cabInterior.add(pDoorLeft);
+    const pDoorRight = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.72, 0.05), stainlessInteriorMat);
+    pDoorRight.position.set(0.32, 2.38, bulkZ - 0.01);
+    this.cabInterior.add(pDoorRight);
+
+    const pDoorGlass = new THREE.Mesh(new THREE.PlaneGeometry(0.40, 0.72), this._clearGlassMat);
+    pDoorGlass.rotation.y = Math.PI;
+    pDoorGlass.position.set(0.06, 2.38, bulkZ - 0.01);
+    this.cabInterior.add(pDoorGlass);
+
+    // 仕切扉のレバーハンドル＆「乗務員室 立入禁止」青プレート
+    const pDoorHandle = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.022, 0.045), chromeMat);
+    pDoorHandle.position.set(-0.16, 1.95, bulkZ - 0.045);
+    this.cabInterior.add(pDoorHandle);
+    const noEntrySign = new THREE.Mesh(
+      new THREE.BoxGeometry(0.18, 0.055, 0.006),
+      extBlueBandMat
+    );
+    noEntrySign.position.set(0.06, 1.88, bulkZ - 0.038);
+    this.cabInterior.add(noEntrySign);
+
+    // E-3. 右ベイ（助士席背後）：大判の透明仕切り展望窓 (x = +0.46 .. +1.24, y = 1.98 .. 2.78) ＋ 客室保護棒！
+    const rrLower = new THREE.Mesh(new THREE.BoxGeometry(1.00, 0.70, 0.07), wallLightMat);
+    rrLower.position.set(0.88, 1.63, bulkZ);
+    this.cabInterior.add(rrLower);
+    const rrUpper = new THREE.Mesh(new THREE.BoxGeometry(1.00, 0.30, 0.07), wallLightMat);
+    rrUpper.position.set(0.88, 2.93, bulkZ);
+    this.cabInterior.add(rrUpper);
+    const rrStileIn = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.80, 0.07), wallLightMat);
+    rrStileIn.position.set(0.42, 2.38, bulkZ);
+    this.cabInterior.add(rrStileIn);
+    const rrStileOut = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.80, 0.07), wallLightMat);
+    rrStileOut.position.set(1.31, 2.38, bulkZ);
+    this.cabInterior.add(rrStileOut);
+
+    const rrGlass = new THREE.Mesh(new THREE.PlaneGeometry(0.78, 0.80), this._clearGlassMat);
+    rrGlass.rotation.y = Math.PI;
+    rrGlass.position.set(0.85, 2.38, bulkZ);
+    this.cabInterior.add(rrGlass);
+
+    const guardRail = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.011, 0.011, 0.78, 10),
+      chromeMat
+    );
+    guardRail.rotation.z = Math.PI / 2;
+    guardRail.position.set(0.85, 2.12, bulkZ + 0.035);
+    this.cabInterior.add(guardRail);
+
+    // =========================================================================
+    // F. 仕切り窓の奥に広がる「1号車（クハE531-11）中空ボディ＆照明付きリアル客室」(z = +0.96 .. +18.95m)
+    //    振り向いた瞬間、青モケット座席・セミクロス席・荷棚・白いつり革・車窓風景・2号車連結面まで一望！
+    // =========================================================================
+    const saloonGroup = new THREE.Group();
+    this.cabInterior.add(saloonGroup);
+
+    const saloonFloorMat = new THREE.MeshStandardMaterial({
+      color: 0x7b8088,
+      roughness: 0.68,
+      metalness: 0.06,
+    });
+    const saloonFloor = new THREE.Mesh(new THREE.BoxGeometry(2.84, 0.06, 18.04), saloonFloorMat);
+    saloonFloor.position.set(0, 1.26, 9.96);
+    saloonGroup.add(saloonFloor);
+
+    // 通路中央の床敷物色分けライン
+    const aisleRunner = new THREE.Mesh(
+      new THREE.BoxGeometry(0.96, 0.064, 17.90),
+      new THREE.MeshStandardMaterial({ color: 0x626872, roughness: 0.62 })
+    );
+    aisleRunner.position.set(0, 1.262, 9.96);
+    saloonGroup.add(aisleRunner);
+
+    // 客室天井 ＆ 2列連続LED照明カバー (z = +0.96 .. +18.95)
+    const saloonCeiling = new THREE.Mesh(new THREE.BoxGeometry(2.84, 0.12, 18.04), wallLightMat);
+    saloonCeiling.position.set(0, 3.16, 9.96);
+    saloonGroup.add(saloonCeiling);
+
+    const ceilingLedMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(1.25, 1.28, 1.32) });
+    for (const lx of [-0.56, 0.56]) {
+      const ledStrip = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.025, 17.2), ceilingLedMat);
+      ledStrip.position.set(lx, 3.095, 9.96);
+      saloonGroup.add(ledStrip);
+    }
+
+    // 客室内をほんのり明るく浮かび上がらせる室内灯 PointLight（薄暮・夜間・雨天での振り返りリアリティ抜群！）
+    const saloonLight1 = new THREE.PointLight(0xf4f7ff, 0.72, 11.0);
+    saloonLight1.position.set(0, 2.95, 4.5);
+    saloonGroup.add(saloonLight1);
+    const saloonLight2 = new THREE.PointLight(0xf4f7ff, 0.58, 12.0);
+    saloonLight2.position.set(0, 2.95, 12.5);
+    saloonGroup.add(saloonLight2);
+
+    // 左右の中空客室側壁（客室窓を開口させたまま、腰壁・幕板・4箇所の両開きステンレス客用扉を配置！）
+    const doorZs = [2.85, 6.45, 11.35, 16.05];
+    for (const side of [-1, 1]) {
+      const sx = side * 1.41;
+      // 客室腰壁 (y = 1.28 .. 1.96)
+      const wainscot = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.68, 18.0), wallLightMat);
+      wainscot.position.set(sx, 1.62, 9.96);
+      saloonGroup.add(wainscot);
+
+      // 外装側のステンレス＆E531コバルトブルー帯
+      const extSkin = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.74, 18.0), extBlueBandMat);
+      extSkin.position.set(sx + side * 0.045, 1.64, 9.96);
+      saloonGroup.add(extSkin);
+
+      // 客室上部幕板 (y = 2.82 .. 3.12)
+      const frieze = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.30, 18.0), wallLightMat);
+      frieze.position.set(sx, 2.97, 9.96);
+      saloonGroup.add(frieze);
+
+      // ステンレスパイプ荷棚 (y = 2.74)
+      const luggageRack = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.022, 16.8), chromeMat);
+      luggageRack.position.set(sx - side * 0.18, 2.74, 9.96);
+      saloonGroup.add(luggageRack);
+
+      // 4箇所の両開きステンレス客用扉（扉窓は開口、鴨居にLED次駅案内器！）
+      for (const dz of doorZs) {
+        const dBot = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.80, 1.30), stainlessInteriorMat);
+        dBot.position.set(sx + side * 0.02, 1.68, dz);
+        saloonGroup.add(dBot);
+
+        const dCenterSeam = new THREE.Mesh(new THREE.BoxGeometry(0.065, 1.56, 0.14), stainlessInteriorMat);
+        dCenterSeam.position.set(sx + side * 0.02, 2.06, dz);
+        saloonGroup.add(dCenterSeam);
+
+        for (const oz of [-0.62, 0.62]) {
+          const dPillar = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.90, 0.22), wallLightMat);
+          dPillar.position.set(sx, 2.40, dz + oz);
+          saloonGroup.add(dPillar);
+        }
+
+        // ドア足元の黄色い滑り止めライン
+        const yellowStep = new THREE.Mesh(
+          new THREE.BoxGeometry(0.14, 0.01, 1.26),
+          new THREE.MeshBasicMaterial({ color: 0xd9b318 })
+        );
+        yellowStep.position.set(sx - side * 0.08, 1.295, dz);
+        saloonGroup.add(yellowStep);
+
+        // ドア上鴨居のLED車内案内表示器
+        const doorHeaderLed = new THREE.Mesh(
+          new THREE.BoxGeometry(0.04, 0.09, 0.62),
+          new THREE.MeshBasicMaterial({ color: 0x161a20 })
+        );
+        doorHeaderLed.position.set(sx - side * 0.035, 2.89, dz);
+        saloonGroup.add(doorHeaderLed);
+      }
+
+      // E531系 1号車の座席配置：1-2扉間＆3-4扉間ロングシート ＋ 2-3扉間セミクロス（ボックス席）！
+      const longBays = [
+        [1.15, 2.12],
+        [3.60, 5.72],
+        [12.10, 15.28],
+      ];
+      for (const [z0, z1] of longBays) {
+        const len = z1 - z0;
+        const zMid = (z0 + z1) * 0.5;
+        const bench = new THREE.Mesh(
+          new THREE.BoxGeometry(0.48, 0.14, len),
+          seatBlueMoquetteMat
+        );
+        bench.position.set(sx - side * 0.26, 1.66, zMid);
+        saloonGroup.add(bench);
+
+        const back = new THREE.Mesh(
+          new THREE.BoxGeometry(0.10, 0.44, len),
+          seatBlueMoquetteMat
+        );
+        back.position.set(sx - side * 0.06, 1.94, zMid);
+        saloonGroup.add(back);
+
+        // 袖仕切り＆縦スタンションポール（握り棒）
+        for (const pz of [z0, z1]) {
+          const partition = new THREE.Mesh(
+            new THREE.BoxGeometry(0.46, 0.68, 0.035),
+            wallLightMat
+          );
+          partition.position.set(sx - side * 0.25, 1.88, pz);
+          saloonGroup.add(partition);
+
+          const pole = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.015, 0.015, 1.78, 8),
+            chromeMat
+          );
+          pole.position.set(sx - side * 0.46, 2.18, pz);
+          saloonGroup.add(pole);
+        }
+      }
+
+      // 2-3扉間（z = 7.35 .. 10.45）：E531系近郊仕様の象徴「向かい合わせ4人掛けセミクロスシート（ボックス席）」！
+      for (const boxZ of [8.15, 9.65]) {
+        for (const dirZ of [-0.42, 0.42]) {
+          const crossCushion = new THREE.Mesh(
+            new THREE.BoxGeometry(0.88, 0.14, 0.42),
+            seatBlueMoquetteMat
+          );
+          crossCushion.position.set(sx - side * 0.46, 1.66, boxZ + dirZ);
+          saloonGroup.add(crossCushion);
+
+          const crossBack = new THREE.Mesh(
+            new THREE.BoxGeometry(0.88, 0.58, 0.09),
+            seatBlueMoquetteMat
+          );
+          crossBack.position.set(sx - side * 0.46, 1.98, boxZ + dirZ * 1.42);
+          saloonGroup.add(crossBack);
+        }
+      }
+    }
+
+    // 吊り革レール＆36個の白いつり革（負荷ゼロの1メッシュ統合！）
+    const strapRailGeoL = new THREE.CylinderGeometry(0.012, 0.012, 16.6, 6);
+    strapRailGeoL.rotateX(Math.PI / 2);
+    for (const rx of [-0.74, 0.74]) {
+      const sRail = new THREE.Mesh(strapRailGeoL, chromeMat);
+      sRail.position.set(rx, 2.92, 9.8);
+      saloonGroup.add(sRail);
+    }
+
+    const strapPositions = [];
+    const strapNormals = [];
+    const strapIndices = [];
+    const pushBoxToArrays = (bx, by, bz, bw, bh, bd) => {
+      const tmp = new THREE.BoxGeometry(bw, bh, bd);
+      tmp.translate(bx, by, bz);
+      const vOff = strapPositions.length / 3;
+      const pA = tmp.attributes.position.array;
+      const nA = tmp.attributes.normal.array;
+      const iA = tmp.index.array;
+      for (let i = 0; i < pA.length; i++) strapPositions.push(pA[i]);
+      for (let i = 0; i < nA.length; i++) strapNormals.push(nA[i]);
+      for (let i = 0; i < iA.length; i++) strapIndices.push(iA[i] + vOff);
+    };
+    for (const rx of [-0.74, 0.74]) {
+      for (let sz = 1.6; sz <= 17.6; sz += 0.92) {
+        // ベルト＋三角白つり革リング
+        pushBoxToArrays(rx, 2.81, sz, 0.012, 0.18, 0.022);
+        pushBoxToArrays(rx, 2.68, sz, 0.016, 0.09, 0.10);
+      }
+    }
+    const strapsGeo = new THREE.BufferGeometry();
+    strapsGeo.setAttribute('position', new THREE.Float32BufferAttribute(strapPositions, 3));
+    strapsGeo.setAttribute('normal', new THREE.Float32BufferAttribute(strapNormals, 3));
+    strapsGeo.setIndex(strapIndices);
+    const strapsMesh = new THREE.Mesh(
+      strapsGeo,
+      new THREE.MeshStandardMaterial({ color: 0xe8ecf0, roughness: 0.52 })
+    );
+    saloonGroup.add(strapsMesh);
+
+    // 1号車後端の妻壁＆ガラス貫通扉（奥の2号車 playerCars[1] が貫通扉越しに見える！）
+    const endBulkZ = 18.92;
+    for (const ex of [-0.92, 0.92]) {
+      const endWallSide = new THREE.Mesh(new THREE.BoxGeometry(0.98, 1.84, 0.08), wallLightMat);
+      endWallSide.position.set(ex, 2.18, endBulkZ);
+      saloonGroup.add(endWallSide);
+    }
+    const endDoorBot = new THREE.Mesh(new THREE.BoxGeometry(0.86, 0.74, 0.06), stainlessInteriorMat);
+    endDoorBot.position.set(0, 1.65, endBulkZ);
+    saloonGroup.add(endDoorBot);
+    const endDoorTop = new THREE.Mesh(new THREE.BoxGeometry(0.86, 0.34, 0.06), stainlessInteriorMat);
+    endDoorTop.position.set(0, 2.93, endBulkZ);
+    saloonGroup.add(endDoorTop);
   }
 
   /**
@@ -1009,22 +2046,22 @@ export class DriverCabView {
     const wy = 314;
     const wr = 46;
 
-    // 時計くぼみへのオレンジ電球グラデーション照射
+    // 時計くぼみへのオレンジ電球グラデーション照射（白飛びを抑え針・数字をくっきり表示！）
     const warmGlow = ctx.createRadialGradient(wx, wy - 44, 4, wx, wy - 10, 95);
-    warmGlow.addColorStop(0, 'rgba(255, 175, 65, 0.55)');
-    warmGlow.addColorStop(1, 'rgba(255, 140, 40, 0.0)');
+    warmGlow.addColorStop(0, 'rgba(245, 168, 62, 0.38)');
+    warmGlow.addColorStop(1, 'rgba(245, 140, 40, 0.0)');
     ctx.fillStyle = warmGlow;
     ctx.fillRect(wx - 85, wy - 95, 170, 180);
 
-    // 懐中時計の白文字盤
-    ctx.fillStyle = '#f5f4ec';
+    // 懐中時計のアイボリーホワイト文字盤
+    ctx.fillStyle = '#dad5c6';
     ctx.beginPath();
     ctx.arc(wx, wy, wr, 0, Math.PI * 2);
     ctx.fill();
 
     // 1〜12 アラビア数字目盛り
-    ctx.fillStyle = '#181a1c';
-    ctx.font = '700 11px "Inter", sans-serif';
+    ctx.fillStyle = '#111316';
+    ctx.font = '800 12px "Inter", sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     for (let hNum = 1; hNum <= 12; hNum++) {
@@ -1225,6 +2262,43 @@ export class DriverCabView {
     this.panelTex.needsUpdate = true;
   }
 
+  /**
+   * 自列車（E531系0番台 10両編成）の各車両を前後ボギー台車座標とカントに厳密追従させる！
+   */
+  _updatePlayerConsist(playerDistance) {
+    if (!this.route || !this.playerCars) return;
+    const halfBogie = 6.85;
+    const spacing = 20.0;
+    const basis = new THREE.Matrix4();
+    const carFwd = new THREE.Vector3();
+    const carBack = new THREE.Vector3();
+    const carRight = new THREE.Vector3();
+    const carUp = new THREE.Vector3();
+
+    for (let c = 0; c < this.playerCars.length; c++) {
+      const mesh = this.playerCars[c];
+      // 1号車(c=0)中心は停止基準点から後方 8.95m（外装FRPノーズ先端が z=-1.10m で運転台ガラスのすぐ外側に一致！）
+      const centerD = playerDistance - 8.95 - c * spacing;
+      const fFront = this.route.getFrameAt(centerD + halfBogie);
+      const fRear = this.route.getFrameAt(centerD - halfBogie);
+      const fMid = this.route.getFrameAt(centerD);
+
+      mesh.position.addVectors(fFront.position, fRear.position).multiplyScalar(0.5);
+      carFwd.subVectors(fFront.position, fRear.position);
+      if (carFwd.lengthSq() > 1e-8) {
+        carFwd.normalize();
+        carBack.copy(carFwd).negate();
+        carRight.crossVectors(carFwd, WORLD_UP).normalize();
+        carUp.crossVectors(carBack, carRight).normalize();
+        basis.makeBasis(carRight, carUp, carBack);
+        mesh.quaternion.setFromRotationMatrix(basis);
+        if (Math.abs(fMid.cant) > 1e-5) {
+          mesh.rotateZ(-fMid.cant);
+        }
+      }
+    }
+  }
+
   update(dt, elapsedTime, simState) {
     const safeDt = Math.min(dt, 0.05);
     const frame = simState.frame;
@@ -1238,6 +2312,15 @@ export class DriverCabView {
     );
     this.trainRoot.position.copy(frame.position);
     this.trainRoot.quaternion.setFromRotationMatrix(basis);
+
+    // 0. 自列車 E531系 10両フル編成の3D実体を路線曲線・勾配・カントへリアルタイム追従！
+    this._updatePlayerConsist(simState.distance || 0);
+
+    // スタフ種別切替同期
+    if (simState.serviceType && simState.serviceType !== this._lastServiceType) {
+      this._lastServiceType = simState.serviceType;
+      this._redrawStaffCard(simState.serviceType);
+    }
 
     // 1. 6自由度 空気バネサスペンション更新（上下・ピッチ・ロール・左右スウェイ・ヨー＋曲線超過遠心力！）
     this.suspVelX += (-52.0 * this.suspX - 9.2 * this.suspVelX) * safeDt;
@@ -1284,16 +2367,22 @@ export class DriverCabView {
     this.bodyRig.rotation.x = this.suspPitch + this.accelPitch;
     this.bodyRig.rotation.y = this.suspYaw;
 
+    // 360°見回し時：正面(yaw=0)では計器が見やすい-0.142rad、真後ろ(yaw=±π)では客室が真っ直ぐ見える水平目線へ滑らかに補間！
+    const forwardAlign = 0.55 + 0.45 * Math.cos(this.lookYawOffset);
     this.camera.rotation.order = 'YXZ';
     this.camera.rotation.y = this.lookYawOffset;
-    this.camera.rotation.x = this.basePitch + this.lookPitchOffset;
+    this.camera.rotation.x = this.basePitch * forwardAlign + this.lookPitchOffset;
     this.camera.rotation.z = 0;
 
-    // 2. 駅ホーム上屋進入時のキャブ内ダイナミック照り返し照明
+    // 2. 駅ホーム上屋進入時のキャブ内ダイナミック照り返し照明 ＆ 車上ITVホーム監視モニタ自動起動
     let underStationCanopy = 0;
+    let inPlatformZone = false;
     const d = simState.distance || 0;
     for (let i = 0; i < STATIONS.length; i++) {
       const st = STATIONS[i];
+      if (d >= st.platformStart - 25 && d <= st.platformEnd + 18) {
+        inPlatformZone = true;
+      }
       const roofLen = (st.platformEnd - st.platformStart) * st.roofRatio;
       const roofStart = st.platformEnd - roofLen;
       if (d >= roofStart - 8 && d <= st.platformEnd + 6) {
@@ -1302,6 +2391,12 @@ export class DriverCabView {
         underStationCanopy = Math.max(underStationCanopy, enterFade * exitFade);
       }
     }
+    const itvActive = inPlatformZone && (simState.speedKmh || 0) < 38;
+    if (itvActive !== this._itvLastActive) {
+      this._itvLastActive = itvActive;
+      this._redrawCabItvScreen(itvActive);
+    }
+
     this.stationLightLevel = THREE.MathUtils.lerp(
       this.stationLightLevel,
       underStationCanopy,
@@ -1311,7 +2406,7 @@ export class DriverCabView {
       this.stationCanopyLight.intensity = this.stationLightLevel * 1.18;
     }
     if (this.cabFillLight) {
-      this.cabFillLight.intensity = 0.32 + this.stationLightLevel * 0.24;
+      this.cabFillLight.intensity = 0.34 + this.stationLightLevel * 0.24;
     }
 
     // 3. 左手ワンハンドルマスコンの前後スイング＋スリット前後スライド（右手握り棒は固定！）
@@ -1322,13 +2417,22 @@ export class DriverCabView {
     this.masconPivot.rotation.x = this.masconVisualAngle;
     this.masconPivot.position.z = -0.405 + this.masconVisualAngle * 0.085;
 
-    // 4. 右スイッチ台の緑色戸閉・起動ランプ連動
+    // 4. 右スイッチ台の緑色戸閉ランプ＆トグル・ワイパーつまみ連動
     if (this.greenSwitchMat) {
       if (simState.doorsOpen) {
         this.greenSwitchMat.color.setRGB(0.08, 0.22, 0.10);
       } else {
-        this.greenSwitchMat.color.setRGB(0.15, 2.8, 0.65);
+        this.greenSwitchMat.color.setRGB(0.14, 1.65, 0.48);
       }
+    }
+    if (this.beamToggleMesh) {
+      this.beamToggleMesh.rotation.x = this.headlightMode === 'high' ? -0.32 : 0.28;
+    }
+    if (this.snowToggleMesh) {
+      this.snowToggleMesh.rotation.x = simState.snowBrake ? -0.30 : 0.24;
+    }
+    if (this.wiperKnobMesh) {
+      this.wiperKnobMesh.rotation.y = this.wiperActive ? 0.65 : 0.0;
     }
 
     // 5. 雨天時の屋外雨粒・フロントガラス水滴・3Dワイパー払拭更新

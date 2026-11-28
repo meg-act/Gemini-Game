@@ -541,7 +541,7 @@ function createDoubleDeckerWideBodyGeometry(length = 19.46) {
 /**
  * 車体と同じ裾絞り＋丸屋根断面から前頭へ滑らかに絞り込む3D FRP先頭シェル＆前面キャップ
  */
-function createCabNoseGeometries() {
+function createCabNoseGeometries({ flatFace = false } = {}) {
   // 閉じた断面リング（反時計回り：下辺 → 右側裾絞り → 屋根 → 左側裾絞り）
   const baseRing = [];
   baseRing.push([0.0, 1.00]);
@@ -556,8 +556,10 @@ function createCabNoseGeometries() {
   const M = baseRing.length;
   const yc = 2.26;
 
-  // 前面の微後退角（上部がわずかに後ろへ倒れる現代JR東日本の精悍な輪郭）
-  const zFrontOfY = (y) => -0.32 + Math.max(0, (y - 1.80) * 0.045);
+  // E235系はKEN OKUYAMAデザインの垂直に近いフラットフェイス、E233/E531/E231は上部が優美に後退するFRP曲面
+  const zFrontOfY = flatFace
+    ? (y) => -0.29 + Math.max(0, (y - 2.35) * 0.012)
+    : (y) => -0.32 + Math.max(0, (y - 1.80) * 0.045);
 
   const N = 7;
   const sPos = [];
@@ -568,10 +570,10 @@ function createCabNoseGeometries() {
 
   for (let i = 0; i <= N; i++) {
     const t = i / N;
-    // 前縁に向かって滑らかなR面取り
-    const bevel = Math.pow(t, 2.8);
-    const scaleX = 1.0 - 0.032 * bevel;
-    const scaleY = 1.0 - 0.022 * bevel;
+    // E235は外周エッジのシャープな角丸ベゼル、他形式は滑らかなFRP面取り
+    const bevel = Math.pow(t, flatFace ? 4.2 : 2.8);
+    const scaleX = 1.0 - (flatFace ? 0.018 : 0.032) * bevel;
+    const scaleY = 1.0 - (flatFace ? 0.014 : 0.022) * bevel;
     for (let m = 0; m < M; m++) {
       const [bx, by] = baseRing[m];
       const x = bx * scaleX;
@@ -614,7 +616,7 @@ function createCabNoseGeometries() {
   const pushCapV = (x, y, z) => {
     const idx = cPos.length / 3;
     cPos.push(x, y, z - 0.004);
-    const ny = y > 1.80 ? 0.045 : 0.0;
+    const ny = flatFace ? (y > 2.35 ? 0.012 : 0.0) : y > 1.80 ? 0.045 : 0.0;
     const nl = Math.hypot(ny, 1);
     cNorm.push(0, ny / nl, -1 / nl);
     // -Z方向から見て +X が画面左(u=0), -X が画面右(u=1)
@@ -1115,83 +1117,411 @@ function createFrontMaskTextures(series) {
     mCtx.fillStyle = '#d8d8d8';
     mCtx.fillRect(0, 858, S, S - 858);
   } else if (series === 'YAMANOTE') {
-    // === 山手線 E235系0番台（象徴的な黒フェイス＋ウグイス色ドットグラデーション額縁！） ===
-    ctx.fillStyle = '#121519';
+    // === 実車写真完全準拠：山手線 E235系0番台（トウ04編成・KEN OKUYAMA フラットブラック＋ウグイスドット顔！） ===
+    // 1. 外周の無塗装ステンレス車体シェル＋角丸シルバーメタリック外周ベゼル（電子レンジ型の象徴的な二重額縁！）
+    const stOuterGrad = ctx.createLinearGradient(0, 0, S, S);
+    stOuterGrad.addColorStop(0.0, '#c6cfd9');
+    stOuterGrad.addColorStop(0.5, '#dfe6ee');
+    stOuterGrad.addColorStop(1.0, '#b2bcc7');
+    ctx.fillStyle = stOuterGrad;
     ctx.fillRect(0, 0, S, S);
+    mCtx.fillStyle = '#e8e8ec';
+    mCtx.fillRect(0, 0, S, S);
+    rCtx.fillStyle = '#303030';
+    rCtx.fillRect(0, 0, S, S);
 
-    ctx.strokeStyle = '#dce2e8';
-    ctx.lineWidth = 28;
-    ctx.strokeRect(20, 20, S - 40, S - 40);
-    mCtx.strokeStyle = '#d8d8d8';
-    mCtx.lineWidth = 28;
-    mCtx.strokeRect(20, 20, S - 40, S - 40);
+    // ステンレス車体とシルバーFRPベゼルの黒ゴム目地＋角丸シルバーメタリック額縁
+    const traceE235Bezel = (pad = 0, rad = 74) => {
+      ctx.beginPath();
+      ctx.roundRect(22 + pad, 20 + pad, S - 44 - pad * 2, 956 - pad * 2, Math.max(18, rad - pad));
+    };
+    ctx.fillStyle = '#1b2026';
+    traceE235Bezel(0, 76);
+    ctx.fill();
 
-    // 窓下ウグイス色（#80c342）ドットマトリクス・グラデーション帯
-    for (let row = 0; row < 15; row++) {
-      const ratio = 1.0 - Math.abs(row - 7.0) / 8.0;
-      const dotSize = Math.max(4, ratio * 15);
+    const silBezelGrad = ctx.createLinearGradient(0, 20, S, 976);
+    silBezelGrad.addColorStop(0.0, '#e3e9f0');
+    silBezelGrad.addColorStop(0.35, '#f2f6fa');
+    silBezelGrad.addColorStop(0.7, '#d5dee8');
+    silBezelGrad.addColorStop(1.0, '#bac4d0');
+    ctx.fillStyle = silBezelGrad;
+    traceE235Bezel(5, 72);
+    ctx.fill();
+
+    // 2. 内側のディープピアノブラック・フラットフロントマスク（高光沢クリアコート仕上げ！）
+    ctx.fillStyle = '#252b33';
+    traceE235Bezel(26, 56);
+    ctx.fill();
+
+    const pianoGrad = ctx.createLinearGradient(0, 48, 0, 950);
+    pianoGrad.addColorStop(0.0, '#12161c');
+    pianoGrad.addColorStop(0.45, '#0b0e13');
+    pianoGrad.addColorStop(1.0, '#10141a');
+    ctx.fillStyle = pianoGrad;
+    traceE235Bezel(30, 52);
+    ctx.fill();
+
+    mCtx.save();
+    mCtx.beginPath();
+    mCtx.roundRect(52, 50, S - 104, 900, 52);
+    mCtx.fillStyle = '#0e0e10';
+    mCtx.fill();
+    mCtx.restore();
+
+    rCtx.save();
+    rCtx.beginPath();
+    rCtx.roundRect(52, 50, S - 104, 900, 52);
+    rCtx.fillStyle = '#1c1c1c';
+    rCtx.fill();
+    rCtx.restore();
+
+    ccCtx.save();
+    ccCtx.beginPath();
+    ccCtx.roundRect(52, 50, S - 104, 900, 52);
+    ccCtx.fillStyle = '#888888';
+    ccCtx.fill();
+    ccCtx.restore();
+
+    // 3. おでこ上部：左右の横長角丸3連ホワイトLED前照灯＋内側クリアテールランプ ＆ 中央大型フルカラーLED行先表示器
+    for (const side of [-1, 1]) {
+      // x_world = ±0.96m -> x_px = 512 ∓ 344 (168, 856), y_world = 3.24m -> y_px = 112
+      const cx = S * 0.5 - side * 344;
+      const cy = 112;
+
+      // スモークポリカーボネート一体灯具ハウジング
+      ctx.fillStyle = '#1e242d';
+      ctx.strokeStyle = '#434d59';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.roundRect(cx - 64, cy - 24, 128, 48, 12);
+      ctx.fill();
+      ctx.stroke();
+
+      // 外側3連スクエアLEDヘッドライト素子（E235特有の粒立ち3眼LED！）
+      const ledStart = side > 0 ? cx - 54 : cx - 6;
+      for (let k = 0; k < 3; k++) {
+        const lx = ledStart + k * 21;
+        ctx.fillStyle = '#eef8ff';
+        ctx.beginPath();
+        ctx.roundRect(lx, cy - 13, 17, 26, 3);
+        ctx.fill();
+        eCtx.fillStyle = '#f2f9ff';
+        eCtx.beginPath();
+        eCtx.roundRect(lx - 1, cy - 14, 19, 28, 4);
+        eCtx.fill();
+      }
+
+      // 内側クリアレンズLED尾灯（消灯時はシルバーグレー格子、後尾時は赤発光）
+      const tailX = side > 0 ? cx + 18 : cx - 50;
+      ctx.fillStyle = '#3c262a';
+      ctx.beginPath();
+      ctx.roundRect(tailX, cy - 11, 32, 22, 4);
+      ctx.fill();
+    }
+
+    // 列番LED (左) ＆ 大型フルカラーLED (中央)
+    ctx.fillStyle = '#06080b';
+    ctx.strokeStyle = '#242b35';
+    ctx.lineWidth = 2;
+    ctx.fillRect(252, 82, 114, 54);
+    ctx.strokeRect(252, 82, 114, 54);
+    ctx.fillRect(378, 78, 360, 62);
+    ctx.strokeRect(378, 78, 360, 62);
+
+    eCtx.fillStyle = '#eef4ff';
+    eCtx.font = '700 28px "JetBrains Mono", monospace';
+    eCtx.fillText('1504G', 262, 119);
+
+    // 山手線グリーンの路線バッジ＋白文字「東京・品川方面」＋季節のイチョウ風ピクセルアイコン
+    eCtx.fillStyle = '#6fba2c';
+    eCtx.fillRect(386, 86, 16, 46);
+    eCtx.fillStyle = '#ffffff';
+    eCtx.font = '700 31px "Noto Sans JP", sans-serif';
+    eCtx.fillText('東京・品川方面', 414, 115);
+    eCtx.fillStyle = '#a8e063';
+    eCtx.font = '700 13px "Inter", sans-serif';
+    eCtx.fillText('For Tokyo / Shinagawa', 438, 133);
+    // 右端の黄色イチョウ葉ドットアクセント
+    eCtx.fillStyle = '#f5c724';
+    eCtx.beginPath();
+    eCtx.arc(714, 106, 12, Math.PI * 0.15, Math.PI * 0.85, true);
+    eCtx.lineTo(714, 122);
+    eCtx.closePath();
+    eCtx.fill();
+
+    // フルカラーLEDドットマトリクス網目
+    eCtx.fillStyle = '#000000';
+    for (let ly = 78; ly < 142; ly += 3) eCtx.fillRect(252, ly, 488, 1);
+    for (let lx = 252; lx < 740; lx += 3) eCtx.fillRect(lx, 78, 1, 64);
+
+    // 4. 大型フラッシュ前面ガラス（上部グリーンスモーク遮光帯＋左下白モダン書体「04」標記）
+    drawCabWindshield(80, 156, S - 160, 404, null, null);
+    const tintG = ctx.createLinearGradient(0, 156, 0, 212);
+    tintG.addColorStop(0, 'rgba(18, 56, 48, 0.55)');
+    tintG.addColorStop(1, 'rgba(18, 56, 48, 0.0)');
+    ctx.fillStyle = tintG;
+    ctx.fillRect(80, 156, S - 160, 56);
+
+    // ガラス左上の編成札（トウ04）＆ガラス左下の白い「04」ステンシル
+    ctx.fillStyle = '#1b3318';
+    ctx.fillRect(104, 174, 68, 34);
+    ctx.fillStyle = '#d9f5be';
+    ctx.font = '700 22px "Inter", sans-serif';
+    ctx.fillText('04', 124, 199);
+
+    ctx.fillStyle = 'rgba(238, 244, 248, 0.92)';
+    ctx.font = '800 26px "Inter", sans-serif';
+    ctx.fillText('04', 102, 544);
+
+    // 窓下ワイパー格納スリット溝＆黒手すり＋右端の白斜体「JR」ロゴ
+    ctx.fillStyle = '#06080b';
+    ctx.fillRect(80, 566, S - 160, 28);
+    ctx.fillStyle = '#262e38';
+    ctx.fillRect(92, 578, S - 280, 4);
+
+    ctx.fillStyle = '#f4f7fa';
+    ctx.font = 'italic 900 38px "Inter", sans-serif';
+    ctx.fillText('JR', S - 162, 594);
+
+    // 5. E235系最大の特徴：下端が濃密で上方（窓側）へ向かって粒が小さくなるウグイス色スクエア・ドットグラデーション！
+    const dotRows = 17;
+    const dotCols = 39;
+    const gridLeft = 82;
+    const gridW = S - 164;
+    const colPitch = gridW / dotCols;
+    const gridTop = 610;
+    const rowPitch = 18.2;
+
+    for (let r = 0; r < dotRows; r++) {
+      // r=0(上端・窓直下) は極小ドット、r=16(下端) はほぼ繋がる太い矩形ドット！
+      const t = (r + 1) / dotRows; // 0.06 .. 1.0
+      const wDot = colPitch * (0.24 + 0.64 * Math.pow(t, 0.78));
+      const hDot = rowPitch * (0.18 + 0.68 * Math.pow(t, 0.92));
+      const cy = gridTop + r * rowPitch + rowPitch * 0.5;
+
       ctx.fillStyle = '#80c342';
-      for (let col = 0; col < 44; col++) {
-        const dx = 66 + col * 20.5;
-        const dy = 620 + row * 18.5;
-        ctx.fillRect(dx, dy, dotSize, dotSize);
+      mCtx.fillStyle = '#141414';
+      rCtx.fillStyle = '#484848';
+
+      for (let c = 0; c < dotCols; c++) {
+        const cx = gridLeft + (c + 0.5) * colPitch;
+        // 下端両隅のステップ手すり凹み領域はドットを抜く（実車ディテール！）
+        if (r >= 13 && (c < 4 || c >= dotCols - 4)) continue;
+        ctx.fillRect(cx - wDot * 0.5, cy - hDot * 0.5, wDot, hDot);
+        mCtx.fillRect(cx - wDot * 0.5, cy - hDot * 0.5, wDot, hDot);
+        rCtx.fillRect(cx - wDot * 0.5, cy - hDot * 0.5, wDot, hDot);
       }
     }
 
-    eCtx.fillStyle = '#ffffff';
-    eCtx.font = '700 36px sans-serif';
-    eCtx.fillText('東京・品川方面', 378, 118);
-
-    for (const side of [-1, 1]) {
-      eCtx.fillStyle = '#f2f8ff';
-      eCtx.beginPath();
-      eCtx.roundRect(S * 0.5 + side * 355 - 30, 80, 60, 46, 14);
-      eCtx.fill();
+    // 下端両隅の埋め込みステップ手すりポケット
+    for (const sx of [96, S - 168]) {
+      ctx.fillStyle = '#080a0e';
+      ctx.beginPath();
+      ctx.roundRect(sx, 862, 72, 48, 8);
+      ctx.fill();
+      ctx.fillStyle = '#aeb8c4';
+      ctx.fillRect(sx + 10, 883, 52, 5);
     }
 
-    drawCabWindshield(84, 160, S - 168, 412, 'トウ08', '#2a4a24');
-
-    ctx.fillStyle = '#f2f6fa';
-    ctx.font = 'italic 900 42px "Inter", sans-serif';
-    ctx.fillText('JR', S - 172, 604);
+    // 最下部のシルバー下縁リップ
+    ctx.fillStyle = '#cfd8e2';
+    ctx.fillRect(28, 974, S - 56, 50);
+    ctx.fillStyle = 'rgba(15, 20, 26, 0.55)';
+    ctx.fillRect(0, S - 8, S, 8);
   } else if (series === 'KEIHIN') {
-    // === 京浜東北線 E233系1000番台（ブラックフェイス＋スカイブルー帯＋上部HIDライト！） ===
-    ctx.fillStyle = '#edf1f5';
+    // === 実車写真完全準拠：京浜東北・根岸線 E233系1000番台（サイ144編成・純白FRP＋スカイブルー帯＋3本ワイパー顔！） ===
+    // 1. 外周の無塗装ヘアライン・ステンレス車体アーチ額縁
+    const stRim = ctx.createLinearGradient(0, 0, S, S);
+    stRim.addColorStop(0.0, '#c8d1dc');
+    stRim.addColorStop(0.4, '#e4ebf2');
+    stRim.addColorStop(1.0, '#b5bfc9');
+    ctx.fillStyle = stRim;
     ctx.fillRect(0, 0, S, S);
+    mCtx.fillStyle = '#e8e8ec';
+    mCtx.fillRect(0, 0, S, S);
+    rCtx.fillStyle = '#303030';
+    rCtx.fillRect(0, 0, S, S);
 
-    ctx.fillStyle = '#13171d';
-    ctx.beginPath();
-    ctx.roundRect(56, 48, S - 112, 606, 34);
+    // 2. 黒ゴム目地溝の内側に収まる「純白グロス塗装FRPマスク」（E233系の爽やかな白マスク！）
+    const traceE233Mask = (pad = 0) => {
+      ctx.beginPath();
+      ctx.moveTo(26 + pad, S);
+      ctx.lineTo(22 + pad, 680);
+      ctx.lineTo(22 + pad, 90 + pad);
+      ctx.quadraticCurveTo(22 + pad, 32 + pad, 94 + pad, 26 + pad);
+      ctx.quadraticCurveTo(S * 0.5, 10 + pad, S - 94 - pad, 26 + pad);
+      ctx.quadraticCurveTo(S - 22 - pad, 32 + pad, S - 22 - pad, 90 + pad);
+      ctx.lineTo(S - 22 - pad, 680);
+      ctx.lineTo(S - 26 - pad, S);
+      ctx.closePath();
+    };
+    ctx.fillStyle = '#1f252d'; // EPDMゴム目地
+    traceE233Mask(0);
     ctx.fill();
 
-    eCtx.fillStyle = '#00a8e8';
-    eCtx.fillRect(345, 78, 115, 46);
-    eCtx.fillStyle = '#ffffff';
-    eCtx.font = '700 28px sans-serif';
-    eCtx.fillText('快 速', 364, 111);
-    eCtx.fillText('大 船', 495, 113);
+    const whiteFrp = ctx.createLinearGradient(0, 0, S, 0);
+    whiteFrp.addColorStop(0.00, '#e5ebf2');
+    whiteFrp.addColorStop(0.15, '#f4f7fb');
+    whiteFrp.addColorStop(0.50, '#fbfdff');
+    whiteFrp.addColorStop(0.85, '#f4f7fb');
+    whiteFrp.addColorStop(1.00, '#e3e9f0');
+    ctx.fillStyle = whiteFrp;
+    traceE233Mask(4);
+    ctx.fill();
 
+    mCtx.fillStyle = '#161618';
+    mCtx.fillRect(26, 24, S - 52, 834);
+    rCtx.fillStyle = '#323232';
+    rCtx.fillRect(26, 24, S - 52, 834);
+
+    // 3. E233系特有のシャープなアーチ上辺＋下部段付きブラックフェイス
+    const traceE233Black = (inset = 0) => {
+      ctx.beginPath();
+      ctx.moveTo(58 + inset, 646 - inset);
+      ctx.lineTo(S - 58 - inset, 646 - inset);
+      ctx.lineTo(S - 54 - inset, 114 + inset);
+      ctx.quadraticCurveTo(S - 54 - inset, 62 + inset, S - 118 - inset, 56 + inset);
+      ctx.quadraticCurveTo(S * 0.5, 36 + inset, 118 + inset, 56 + inset);
+      ctx.quadraticCurveTo(54 + inset, 62 + inset, 54 + inset, 114 + inset);
+      ctx.closePath();
+    };
+    ctx.fillStyle = '#242a33';
+    traceE233Black(0);
+    ctx.fill();
+
+    const e233BlkGrad = ctx.createLinearGradient(0, 44, 0, 646);
+    e233BlkGrad.addColorStop(0.0, '#151a21');
+    e233BlkGrad.addColorStop(0.5, '#0e1217');
+    e233BlkGrad.addColorStop(1.0, '#141920');
+    ctx.fillStyle = e233BlkGrad;
+    traceE233Black(3);
+    ctx.fill();
+
+    // 4. おでこ左右の2連プロジェクターHID前照灯＋内側LED赤尾灯（ダーククローム一体ベゼル！）
     for (const side of [-1, 1]) {
-      eCtx.fillStyle = '#ecf7ff';
+      // 外側HID: x_world = ±1.02m -> x_px = 512 ∓ 365 (147, 877)
+      // 内側尾灯: x_world = ±0.89m -> x_px = 512 ∓ 319 (193, 831), y_px = 112
+      const hidX = S * 0.5 - side * 365;
+      const tailX = S * 0.5 - side * 319;
+      const ly = 112;
+      const boxLeft = Math.min(hidX, tailX) - 30;
+
+      ctx.fillStyle = '#242b34';
+      ctx.strokeStyle = '#5a6573';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.roundRect(boxLeft, ly - 24, 106, 48, 14);
+      ctx.fill();
+      ctx.stroke();
+
+      // 外側：高輝度クールホワイトHIDリフレクター
+      ctx.fillStyle = '#eef8ff';
+      ctx.beginPath();
+      ctx.arc(hidX, ly, 18, 0, Math.PI * 2);
+      ctx.fill();
+      eCtx.fillStyle = '#e8f6ff';
       eCtx.beginPath();
-      eCtx.arc(S * 0.5 + side * 368, 104, 22, 0, Math.PI * 2);
+      eCtx.arc(hidX, ly, 20, 0, Math.PI * 2);
       eCtx.fill();
+
+      // 内側：丸型LED赤色標識灯（尾灯）
+      ctx.fillStyle = '#481319';
+      ctx.beginPath();
+      ctx.arc(tailX, ly + 1, 13, 0, Math.PI * 2);
+      ctx.fill();
     }
 
-    drawCabWindshield(84, 156, S - 168, 412, '134', '#005b8a');
+    // 5. おでこ中央の3分割フルカラーLED表示器（列番「1423A」＋種別「快速」ピンク枠＋行先「大 船 / Ofuna」！）
+    const drawE233Led = (bx, by, bw, bh) => {
+      ctx.fillStyle = '#06080b';
+      ctx.strokeStyle = '#262e38';
+      ctx.lineWidth = 2;
+      ctx.fillRect(bx, by, bw, bh);
+      ctx.strokeRect(bx, by, bw, bh);
+      rCtx.fillStyle = '#121212';
+      rCtx.fillRect(bx, by, bw, bh);
+      ccCtx.fillStyle = '#a8a8a8';
+      ccCtx.fillRect(bx, by, bw, bh);
+    };
+    drawE233Led(244, 82, 118, 54); // 列番
+    drawE233Led(374, 76, 392, 64); // 種別＋行先・路線名
 
-    ctx.fillStyle = '#f5f8fa';
-    ctx.font = 'italic 900 44px "Inter", sans-serif';
-    ctx.fillText('JR', S - 172, 634);
+    eCtx.fillStyle = '#f5f8ff';
+    eCtx.font = '700 28px "JetBrains Mono", monospace';
+    eCtx.fillText('1423A', 256, 119);
 
-    // 側面と完全一致する京浜東北スカイブルー帯 (y = 686..823)
+    // 京浜東北線快速の鮮やかなマゼンタピンク種別バッジ＋純白フルカラーLED文字！
+    eCtx.fillStyle = '#e83888';
+    eCtx.fillRect(382, 84, 108, 48);
+    eCtx.fillStyle = '#ffffff';
+    eCtx.font = '700 28px "Noto Sans JP", sans-serif';
+    eCtx.fillText('快 速', 399, 118);
+
+    eCtx.fillStyle = '#00a8ee';
+    eCtx.fillRect(496, 84, 8, 48);
+    eCtx.fillStyle = '#ffffff';
+    eCtx.font = '700 34px "Noto Sans JP", sans-serif';
+    eCtx.fillText('大  船', 556, 114);
+    eCtx.fillStyle = '#bfe8ff';
+    eCtx.font = '700 14px "Inter", sans-serif';
+    eCtx.fillText('Keihin-Tohoku Line', 536, 133);
+
+    // LEDドットマトリクス格子
+    eCtx.fillStyle = '#000000';
+    for (let ly = 76; ly < 142; ly += 3) eCtx.fillRect(244, ly, 524, 1);
+    for (let lx = 244; lx < 768; lx += 3) eCtx.fillRect(lx, 76, 1, 66);
+
+    // 6. 大型曲面1枚ガラス（左上スカイブルー編成札「144」＋左下白ステンシル「144」＋上部グリーンスモーク）
+    drawCabWindshield(78, 156, S - 156, 418, '144', '#00689e');
+    const e233Tint = ctx.createLinearGradient(0, 156, 0, 208);
+    e233Tint.addColorStop(0, 'rgba(14, 52, 62, 0.50)');
+    e233Tint.addColorStop(1, 'rgba(14, 52, 62, 0.0)');
+    ctx.fillStyle = e233Tint;
+    ctx.fillRect(78, 156, S - 156, 52);
+
+    ctx.fillStyle = 'rgba(232, 240, 248, 0.90)';
+    ctx.font = '700 23px "Inter", sans-serif';
+    ctx.fillText('144', 98, 558);
+
+    // 窓下の窪んだ手すりステップ溝＋E233系名物「予備ワイパーを含む3本ワイパーピボット座」！
+    ctx.fillStyle = '#07090c';
+    ctx.fillRect(76, 582, S - 152, 36);
+    ctx.fillStyle = '#2c3540';
+    ctx.fillRect(88, 596, S - 176, 5);
+    for (const wx of [280, 480, 770]) {
+      ctx.fillStyle = '#3a4452';
+      ctx.beginPath();
+      ctx.arc(wx, 610, 8.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // 7. 側面シュラウドと1pxのズレもなく連続する京浜東北スカイブルー帯 (y = 686..823) ＋ 帯内の白斜体「JR」マーク！
     ctx.fillStyle = '#00a0de';
     ctx.fillRect(0, 686, S, 137);
+    mCtx.fillStyle = '#141414';
+    mCtx.fillRect(0, 686, S, 137);
+    rCtx.fillStyle = '#505050';
+    rCtx.fillRect(0, 686, S, 137);
 
-    ctx.fillStyle = '#d6dee6';
+    // 実車E233系1000番台通り、向かって右下スカイブルー帯の中に白抜き斜体「JR」ロゴ！
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'italic 900 46px "Inter", sans-serif';
+    ctx.fillText('JR', S - 196, 772);
+
+    // 8. 下段の無塗装ステンレスステップ＆裾折り返しシャドウ (y = 858..1024)
+    const e233Step = ctx.createLinearGradient(0, 858, 0, S);
+    e233Step.addColorStop(0.0, '#ced7e0');
+    e233Step.addColorStop(0.25, '#ecf1f6');
+    e233Step.addColorStop(0.7, '#cfd8e2');
+    e233Step.addColorStop(1.0, '#a5b0bc');
+    ctx.fillStyle = e233Step;
     ctx.fillRect(0, 858, S, S - 858);
-    mCtx.fillStyle = '#d8d8d8';
+    mCtx.fillStyle = '#dcdce0';
     mCtx.fillRect(0, 858, S, S - 858);
+    rCtx.fillStyle = '#363636';
+    ctx.fillStyle = 'rgba(18, 24, 32, 0.48)';
+    ctx.fillRect(0, 856, S, 4);
+    ctx.fillRect(0, S - 8, S, 8);
   }
 
   ctx.globalCompositeOperation = 'lighter';
@@ -1504,28 +1834,30 @@ function createSideBodyTextures(
       paintStripe(0, 352, W, 34, '#ee7800');
       paintStripe(0, 386, W, 18, '#00703c');
     } else if (series === 'KEIHIN') {
-      paintStripe(0, 36, W, 24, '#00a0de');
+      paintStripe(0, 34, W, 26, '#00a0de');
       paintStripe(0, 330, W, 74, '#00a0de');
     } else if (series === 'YAMANOTE') {
-      // E235系山手線は腰帯なし！幕板のウグイス帯のみ（ドアに縦ドットグラデーション！）
-      paintStripe(0, 34, W, 22, '#80c342');
+      // E235系山手線は腰帯なし！鮮やかなウグイス色の幕板太帯のみ（先頭FRP端は銀ベゼルに合わせる）
+      const ymLeft = isLeadCar && !cabOnRight ? 36 : 0;
+      const ymW = isLeadCar ? W - 36 : W;
+      paintStripe(ymLeft, 30, ymW, 28, '#80c342');
     }
 
-    // 2. 先頭車（クハ）前位のFRP回り込み・乗務員室小窓・乗務員室扉
+    // 2. 先頭車（クハ）前位のFRP回り込み・乗務員室側窓・乗務員室扉
     if (isLeadCar) {
       const frpCol =
         series === 'YAMANOTE'
-          ? '#161a20'
+          ? '#dde4ec' // E235外周はシルバーメタリック額縁！
           : series === 'E231'
             ? '#dde4ec'
             : series === 'E531'
               ? '#f2f5f8'
-              : '#eef1f4';
-      // 車体最前端の白/銀/黒FRP接合縁（帯はFRP側面へも連続）
+              : '#f4f7fb'; // E233は純白FRPマスク！
+      // 車体最前端の白/銀FRP接合縁（帯はFRP側面へも連続）
       const fx = mapX(0, 36);
       paintStripe(fx, 18, 36, 312, frpCol);
-      if (series === 'E231') {
-        mCtx.fillStyle = '#62666e';
+      if (series === 'E231' || series === 'YAMANOTE') {
+        mCtx.fillStyle = series === 'YAMANOTE' ? '#b8bec6' : '#62666e';
         mCtx.fillRect(fx, 18, 36, 312);
       }
       paintStripe(fx, 404, 36, 98, '#dde3ea'); // 裾ステップ
@@ -1558,11 +1890,13 @@ function createSideBodyTextures(
         ctx.fillStyle = '#f2f6fa';
         ctx.fillRect(handleX, 276, 5, 28);
       } else {
-        // クラッシャブルゾーンの乗務員室脇小窓（形式ごとの実寸プロポーション！）
-        if (series === 'KEIHIN' || series === 'YAMANOTE') {
-          // E233系・E235系特有の超スリム縦長スリット小窓（幅約300mm = 32px！）
-          const cwX = mapX(88, 32);
-          drawRealisticWindow(cwX, 108, 32, 104, { radius: 5 });
+        // 乗務員室側窓（運転士・助士横のサッシ窓：E233/E235は黒サッシ角丸窓、E531/E231-1000は2分割引き違い窓）
+        if (series === 'KEIHIN') {
+          const cwX = mapX(68, 58);
+          drawRealisticWindow(cwX, 108, 58, 128, { splitRatio: 0.52, radius: 7 });
+        } else if (series === 'YAMANOTE') {
+          const cwX = mapX(70, 54);
+          drawRealisticWindow(cwX, 110, 54, 124, { radius: 6 });
         } else {
           // image_5.png (クハE531-11) & E231-1000：中央縦桟付きの引き違い乗務員室窓（幅64px×高132px）
           const cwX = mapX(64, 64);
@@ -1580,13 +1914,16 @@ function createSideBodyTextures(
         mCtx.fillRect(cdx, 86, 62, 384);
         rCtx.fillStyle = '#2d2d2d';
         rCtx.fillRect(cdx, 86, 62, 384);
+        // E233系1000番台は実車通り乗務員室扉にもスカイブルー腰帯が連続！
+        if (series === 'KEIHIN') {
+          paintStripe(cdx + 2, 330, 58, 74, '#00a0de');
+        }
         ctx.strokeStyle = '#48505a';
         ctx.lineWidth = 2.5;
         ctx.strokeRect(cdx, 86, 62, 384);
         bCtx.strokeStyle = '#303030';
         bCtx.lineWidth = 3;
         bCtx.strokeRect(cdx, 86, 62, 384);
-        // image_5.png 実寸に合わせた細身の乗務員扉窓（28px幅）
         drawRealisticWindow(cdx + 17, 110, 28, 116, { radius: 5 });
         // 縦グラブレール（手すり）
         const railX = cabOnRight ? cdx + 5 : cdx + 53;
@@ -1635,19 +1972,35 @@ function createSideBodyTextures(
         paintStripe(dx + 3, 330, doorW - 6, 74, '#00a0de');
       }
 
-      // E235系山手線：扉全面の象徴的なウグイス色縦ドットグラデーション帯！
+      // E235系山手線：左右それぞれの扉リーフごとに、角型ドア窓幅(46px)と厳密に揃った縦ウグイス・ドットグラデーション！
+      // （中央戸当たりと左右外縁に美しい無塗装シルバー余白が残る KEN OKUYAMA 実車デザイン完全再現！）
       if (series === 'YAMANOTE') {
-        const stripeX = dx + 10;
-        const stripeW = doorW - 20;
-        // 下半分のソリッドグリーン帯
-        paintStripe(stripeX, 294, stripeW, 134, '#80c342');
-        // 上下へドットが小さくなるハーフトーングラデーション
-        for (let r = 0; r < 6; r++) {
-          const sz = Math.max(2, (6 - r) * 1.45);
-          ctx.fillStyle = '#80c342';
-          for (let px = stripeX + 3; px < stripeX + stripeW - 6; px += 10) {
-            ctx.fillRect(px, 282 - r * 11, sz, sz);
-            ctx.fillRect(px, 434 + r * 9, sz, sz);
+        for (const leafOx of [-56, 10]) {
+          const lx = dc + leafOx;
+          const lw = 46;
+          // 中心部ソリッドグリーン (y = 330..418)
+          paintStripe(lx, 330, lw, 88, '#80c342');
+          // 上側（窓直下 y = 294..328）＆ 下側（裾部 y = 420..462）のスクエア・ドットグラデーション！
+          const cols = 7;
+          const pitchX = lw / cols;
+          for (let r = 0; r < 5; r++) {
+            const frac = (5 - r) / 6; // 0.83 -> 0.17
+            const dw = pitchX * (0.28 + 0.62 * frac);
+            const dh = 6.2 * frac;
+            const yUp = 325 - r * 7.2;
+            const yDn = 423 + r * 7.5;
+            ctx.fillStyle = '#80c342';
+            mCtx.fillStyle = '#141414';
+            rCtx.fillStyle = '#4c4c4c';
+            for (let c = 0; c < cols; c++) {
+              const px = lx + (c + 0.5) * pitchX - dw * 0.5;
+              ctx.fillRect(px, yUp - dh * 0.5, dw, dh);
+              ctx.fillRect(px, yDn - dh * 0.5, dw, dh);
+              mCtx.fillRect(px, yUp - dh * 0.5, dw, dh);
+              mCtx.fillRect(px, yDn - dh * 0.5, dw, dh);
+              rCtx.fillRect(px, yUp - dh * 0.5, dw, dh);
+              rCtx.fillRect(px, yDn - dh * 0.5, dw, dh);
+            }
           }
         }
       }
@@ -1673,16 +2026,16 @@ function createSideBodyTextures(
       rCtx.fillStyle = '#d0d0d0';
       rCtx.fillRect(dc - 1.5, 79, 3, 411);
 
-      // 左右のフラッシュドア窓（E233/E235は角型ガラス、E531/E231は角丸ガラス）＋ドア注意ステッカー
-      const doorGlassRad = series === 'KEIHIN' || series === 'YAMANOTE' ? 4 : 9;
+      // 左右の接着式角型ドア窓（E233/E235はシャープな角型ガラス、E531/E231は角丸ガラス）＋ドア注意ステッカー
+      const doorGlassRad = series === 'KEIHIN' || series === 'YAMANOTE' ? 3 : 9;
       for (const ox of [-56, 10]) {
         const dwx = dc + ox;
         drawRealisticWindow(dwx, 102, 46, 186, { radius: doorGlassRad });
 
-        // 胸の高さの小さなドア注意ステッカー（白枠＋控えめなアクセント、光らせない！）
+        // 胸の高さの小さなドア注意ステッカー
         ctx.fillStyle = '#e8edf0';
         ctx.fillRect(dwx + 15, 198, 16, 18);
-        ctx.fillStyle = series === 'E531' ? '#0068b7' : '#2a9c5a';
+        ctx.fillStyle = series === 'E531' ? '#0068b7' : series === 'KEIHIN' ? '#f0a800' : '#2a9c5a';
         ctx.fillRect(dwx + 17, 200, 12, 8);
         ctx.fillStyle = '#d84038';
         ctx.fillRect(dwx + 17, 210, 12, 4);
@@ -1694,36 +2047,30 @@ function createSideBodyTextures(
     }
 
     // 4. 扉間の客室窓（実在寸法ミリ単位準拠：E531/E233/E235先頭車前後の1-2扉間「ほっそい1枚固定窓」を厳密再現！）
-    //   横方向スケール: 19,460mm / 2048px = 9.502 mm/px, 縦方向スケール: 2,340mm / 512px = 4.570 mm/px
     const rawWindows = [];
     if (!isLeadCar) {
-      // 中間車：車端1枚窓 (~700mm = 74px) ＋ 扉間2連大窓 (~2,030mm = 214px)
       rawWindows.push({ x0: 58, x1: 132, split: 0, drop: false, radius: 11, end: true });
       rawWindows.push({ x0: 410, x1: 624, split: 0.60, drop: true, radius: 14 });
       rawWindows.push({ x0: 917, x1: 1131, split: 0.60, drop: true, radius: 14 });
       rawWindows.push({ x0: 1423, x1: 1637, split: 0.60, drop: true, radius: 14 });
       rawWindows.push({ x0: 1916, x1: 1990, split: 0, drop: false, radius: 11, end: true });
     } else if (series === 'E531') {
-      // image_5.png クハE531-11 実寸完全準拠！
-      // 1-2扉間のクラッシャブルゾーン隙間埋め細窓：実寸約608mm = 64px（縦横比 1:1.49 で実車写真と完全一致！）
       rawWindows.push({ x0: 552, x1: 616, split: 0, drop: false, radius: 10 });
       rawWindows.push({ x0: 916, x1: 1130, split: 0.58, drop: true, radius: 14 });
-      rawWindows.push({ x0: 1432, x1: 1614, split: 0.58, drop: true, radius: 14 }); // 大型トイレ対応のやや短い2連窓
-      // 4扉後方は無窓ステンレス車椅子・トイレ側壁（image_5.png！）
+      rawWindows.push({ x0: 1432, x1: 1614, split: 0.58, drop: true, radius: 14 });
     } else if (series === 'E231') {
-      // image_2.png クハE231-49（非クラッシャブル0番台：1-2扉間はやや短い2連窓）
       rawWindows.push({ x0: 444, x1: 620, split: 0.56, drop: true, radius: 14 });
       rawWindows.push({ x0: 914, x1: 1128, split: 0.58, drop: true, radius: 14 });
       rawWindows.push({ x0: 1422, x1: 1636, split: 0.58, drop: true, radius: 14 });
       rawWindows.push({ x0: 1924, x1: 1998, split: 0, drop: false, radius: 11, end: true });
     } else if (series === 'KEIHIN' || series === 'YAMANOTE') {
       // E233系・E235系 先頭車（編成前後に1つずつだけある象徴的な超ほっそい1-2扉間1枚固定窓！約513mm = 54px！）
-      rawWindows.push({ x0: 557, x1: 611, split: 0, drop: false, radius: 9 });
-      rawWindows.push({ x0: 916, x1: 1130, split: 0.58, drop: true, radius: 14 });
-      rawWindows.push({ x0: 1420, x1: 1634, split: 0.58, drop: true, radius: 14 });
-      rawWindows.push({ x0: 1910, x1: 1982, split: 0, drop: false, radius: 11, end: true });
+      const winRad = series === 'YAMANOTE' ? 9 : 12;
+      rawWindows.push({ x0: 557, x1: 611, split: 0, drop: false, radius: 8 });
+      rawWindows.push({ x0: 916, x1: 1130, split: 0.58, drop: series === 'KEIHIN', radius: winRad });
+      rawWindows.push({ x0: 1420, x1: 1634, split: 0.58, drop: series === 'KEIHIN', radius: winRad });
+      rawWindows.push({ x0: 1910, x1: 1982, split: 0, drop: false, radius: 9, end: true });
     } else {
-      // E231-1000番台（宇都宮・高崎線 クラッシャブルゾーン先頭車：1-2扉間1枚細窓 64px）
       rawWindows.push({ x0: 552, x1: 616, split: 0, drop: false, radius: 10 });
       rawWindows.push({ x0: 916, x1: 1130, split: 0.58, drop: true, radius: 14 });
       rawWindows.push({ x0: 1420, x1: 1634, split: 0.58, drop: true, radius: 14 });
@@ -1742,72 +2089,85 @@ function createSideBodyTextures(
       });
     }
 
-    // 5. ステンレス車体パネル縦継ぎ目＆裾部点検フタ（情報密度を高める実車ディテール）
-    ctx.fillStyle = 'rgba(72, 82, 92, 0.20)';
-    for (const sx of [200, 480, 680, 860, 1185, 1368, 1682, 1872]) {
-      ctx.fillRect(sx, 22, 1.5, H - 28);
-      bCtx.fillStyle = '#6c6c6c';
-      bCtx.fillRect(sx, 22, 1.5, H - 28);
+    // 5. ステンレス車体パネル縦継ぎ目（E235系 sustina レーザー溶接フラット外板は継ぎ目が極少で超平滑！）
+    if (series !== 'YAMANOTE') {
+      ctx.fillStyle = 'rgba(72, 82, 92, 0.20)';
+      for (const sx of [200, 480, 680, 860, 1185, 1368, 1682, 1872]) {
+        ctx.fillRect(sx, 22, 1.5, H - 28);
+        bCtx.fillStyle = '#6c6c6c';
+        bCtx.fillRect(sx, 22, 1.5, H - 28);
+      }
     }
-    // 床下点検小ハッチ・コック表示（image_2 & image_5 下端・車番と重ならない位置に配置）
+    // 床下点検小ハッチ・コック表示
     for (const hx of [488, 1168, 1468]) {
       const rx = mapX(hx, 20);
-      ctx.strokeStyle = 'rgba(65, 74, 84, 0.48)';
+      ctx.strokeStyle = 'rgba(65, 74, 84, 0.42)';
       ctx.lineWidth = 1.5;
       ctx.strokeRect(rx, 434, 20, 26);
     }
 
-    // 6. 幕板中央の側面LED行先表示器＋赤い車側灯＋黄色保安装置灯（常に正立文字！）
-    const ledX = mapX(980, 96);
-    ctx.fillStyle = '#11151a';
-    ctx.fillRect(ledX, 34, 96, 28);
-    ctx.strokeStyle = '#68727c';
+    // 6. 幕板中央の側面フルカラーLED行先表示器＋赤い車側灯（常に正立文字！）
+    const ledW = series === 'KEIHIN' || series === 'YAMANOTE' ? 112 : 96;
+    const ledX = mapX(974, ledW);
+    ctx.fillStyle = '#0c1015';
+    ctx.fillRect(ledX, 32, ledW, 29);
+    ctx.strokeStyle = '#5c6670';
     ctx.lineWidth = 1.5;
-    ctx.strokeRect(ledX, 34, 96, 28);
+    ctx.strokeRect(ledX, 32, ledW, 29);
     mCtx.fillStyle = '#080808';
-    mCtx.fillRect(ledX, 34, 96, 28);
+    mCtx.fillRect(ledX, 32, ledW, 29);
     rCtx.fillStyle = '#181818';
-    rCtx.fillRect(ledX, 34, 96, 28);
+    rCtx.fillRect(ledX, 32, ledW, 29);
 
-    const ledLabel =
-      series === 'E531'
-        ? '特別快速'
-        : series === 'E231'
-          ? '快速 上野'
-          : series === 'UTSUNOMIYA'
-            ? '上野東京'
-            : series === 'KEIHIN'
-              ? '快速 大船'
-              : '山手線';
-    eCtx.fillStyle = series === 'KEIHIN' ? '#4ad4ff' : series === 'YAMANOTE' ? '#c8ff8c' : '#ff9828';
-    eCtx.font = '700 16px "Noto Sans JP", sans-serif';
-    eCtx.fillText(ledLabel, ledX + 10, 54);
+    if (series === 'KEIHIN') {
+      // E233系側面フルカラーLED：ピンク「快速」バッジ＋白文字「大船」
+      eCtx.fillStyle = '#e83888';
+      eCtx.fillRect(ledX + 4, 36, 38, 21);
+      eCtx.fillStyle = '#ffffff';
+      eCtx.font = '700 13px "Noto Sans JP", sans-serif';
+      eCtx.fillText('快速', ledX + 9, 51);
+      eCtx.font = '700 15px "Noto Sans JP", sans-serif';
+      eCtx.fillText('大 船', ledX + 52, 52);
+    } else if (series === 'YAMANOTE') {
+      // E235系側面大型フルカラーLED：グリーンバー＋白文字「東京・品川」
+      eCtx.fillStyle = '#70bd2e';
+      eCtx.fillRect(ledX + 4, 36, 8, 21);
+      eCtx.fillStyle = '#ffffff';
+      eCtx.font = '700 15px "Noto Sans JP", sans-serif';
+      eCtx.fillText('東京・品川', ledX + 18, 52);
+    } else {
+      const ledLabel =
+        series === 'E531' ? '特別快速' : series === 'E231' ? '快速 上野' : '上野東京';
+      eCtx.fillStyle = '#ff9828';
+      eCtx.font = '700 16px "Noto Sans JP", sans-serif';
+      eCtx.fillText(ledLabel, ledX + 10, 52);
+    }
 
     // 赤色車側灯（閉扉時暗赤）
-    const lampX = cabOnRight ? ledX - 18 : ledX + 108;
+    const lampX = cabOnRight ? ledX - 18 : ledX + ledW + 12;
     ctx.fillStyle = '#781d1d';
     ctx.fillRect(lampX, 43, 10, 9);
 
-    // 7. 3-4扉間腰帯内の白「JR」ロゴ（常に正立・image_2 & image_5 準拠位置！）
+    // 7. 3-4扉間腰部の「JR」ロゴ（E235系は幕板または戸袋部のダークグレーJRマーク、他形式は帯内白JRロゴ）
     const jrX = mapX(1498, 46);
-    ctx.fillStyle = series === 'YAMANOTE' ? '#2c343c' : '#ffffff';
-    ctx.font = 'italic 900 34px "Inter", sans-serif';
-    ctx.fillText('JR', jrX, series === 'YAMANOTE' ? 380 : 378);
+    ctx.fillStyle = series === 'YAMANOTE' ? '#3a424c' : '#ffffff';
+    ctx.font = 'italic 900 32px "Inter", sans-serif';
+    ctx.fillText('JR', jrX, series === 'YAMANOTE' ? 364 : 378);
 
     // 8. 裾部シルバー上の形式番号標記（常に正立）
     const numMap = {
       E531: isLeadCar ? 'クハE531-11' : 'モハE531-11',
       E231: isLeadCar ? 'クハE231-49' : 'モハE231-98',
       UTSUNOMIYA: isLeadCar ? 'クハE231-8001' : 'モハE231-1501',
-      KEIHIN: isLeadCar ? 'クハE233-1001' : 'モハE233-1001',
-      YAMANOTE: isLeadCar ? 'クハE235-8' : 'モハE235-22',
+      KEIHIN: isLeadCar ? 'クハE233-1044' : 'モハE233-1044',
+      YAMANOTE: isLeadCar ? 'クハE235-4' : 'モハE235-12',
     };
     const numX = mapX(982, 110);
     ctx.fillStyle = '#2d353e';
     ctx.font = '700 14px "Inter", sans-serif';
     ctx.fillText(numMap[series] || 'クハE531-11', numX, 444);
 
-    // 9. 車端部の車椅子・ベビーカーピクトグラム＆号車表示（image_2 & image_5！）
+    // 9. 車端部の車椅子・ベビーカーピクトグラム＆号車表示
     if (isLeadCar) {
       const picX = mapX(1844, 38);
       ctx.fillStyle = '#58626d';
@@ -1815,7 +2175,7 @@ function createSideBodyTextures(
       ctx.fillText('10', picX + 2, 112);
       ctx.fillStyle = '#0068b7';
       ctx.fillRect(picX, 118, 17, 17);
-      ctx.fillStyle = '#00a0e9';
+      ctx.fillStyle = series === 'YAMANOTE' || series === 'KEIHIN' ? '#e8488a' : '#00a0e9';
       ctx.fillRect(picX + 19, 118, 17, 17);
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(picX + 5, 122, 7, 9);
@@ -1849,26 +2209,30 @@ function createNoseShroudTexture(series) {
   const ctx = c.getContext('2d');
   const baseCol =
     series === 'YAMANOTE'
-      ? '#161a20'
+      ? '#dce3eb' // E235先頭外周は角丸シルバーメタリック額縁！
       : series === 'E231'
         ? '#dee5ed'
         : series === 'E531'
           ? '#f2f5f8'
-          : '#eef1f4';
+          : '#f5f8fc'; // E233は純白グロスFRP！
   ctx.fillStyle = baseCol;
   ctx.fillRect(0, 0, W, H);
 
-  // 裾部シルバー金属ステップ（y_px = 404..512）
-  if (series !== 'YAMANOTE') {
-    const sg = ctx.createLinearGradient(0, 404, 0, H);
-    sg.addColorStop(0, '#cfd7e0');
-    sg.addColorStop(0.5, '#dce3ec');
-    sg.addColorStop(1, '#aeb8c4');
-    ctx.fillStyle = sg;
-    ctx.fillRect(0, 404, W, H - 404);
+  // E235系は前面エッジ直前を黒ゴム目地で締める
+  if (series === 'YAMANOTE') {
+    ctx.fillStyle = '#181c22';
+    ctx.fillRect(W - 8, 0, 8, H);
   }
 
-  // 側面から前面へシームレスに回り込む腰部カラー帯（y_px = 330..404）
+  // 裾部シルバー金属ステップ（y_px = 404..512）
+  const sg = ctx.createLinearGradient(0, 404, 0, H);
+  sg.addColorStop(0, '#cfd7e0');
+  sg.addColorStop(0.5, '#dce3ec');
+  sg.addColorStop(1, '#aeb8c4');
+  ctx.fillStyle = sg;
+  ctx.fillRect(0, 404, W, H - 404);
+
+  // 側面から前面へシームレスに回り込む幕板＆腰部カラー帯（y_px = 330..404）
   if (series === 'E531') {
     ctx.fillStyle = '#0056b0';
     ctx.fillRect(0, 330, W, 74);
@@ -1888,6 +2252,7 @@ function createNoseShroudTexture(series) {
     ctx.fillRect(0, 386, W, 18);
   } else if (series === 'KEIHIN') {
     ctx.fillStyle = '#00a0de';
+    ctx.fillRect(0, 34, W * 0.45, 26);
     ctx.fillRect(0, 330, W, 74);
   }
 
@@ -1915,10 +2280,14 @@ export class RollingStockFactory {
     this.stdLeadStdFrontGeo = createStandardWideBodyGeometry(19.46, stdLeadDoors, false);
     this.stdLeadStdRearGeo = createStandardWideBodyGeometry(19.46, stdLeadDoors, true);
     this.ddBodyGeo = createDoubleDeckerWideBodyGeometry(19.46);
-    const nose = createCabNoseGeometries();
+    const nose = createCabNoseGeometries({ flatFace: false });
     this.noseShroudGeo = nose.shroudGeo;
     this.noseCapGeo = nose.capGeo;
     this.noseZFrontOfY = nose.zFrontOfY;
+    const e235Nose = createCabNoseGeometries({ flatFace: true });
+    this.e235NoseShroudGeo = e235Nose.shroudGeo;
+    this.e235NoseCapGeo = e235Nose.capGeo;
+    this.e235ZFrontOfY = e235Nose.zFrontOfY;
 
     // 本物の銀色ステンレス（屋根端・妻面・車体ベース：高コントラストIBLで金属光沢を発色）
     this.stainlessMat = new THREE.MeshStandardMaterial({
@@ -2324,16 +2693,21 @@ export class RollingStockFactory {
       carGroup.add(roofSheet);
     }
 
-    // 2. 立体造形 AU726 / AU725 集中式冷房装置
+    // 2. 立体造形 集中式冷房装置（E235はスリムロングAU737、E233/E531は丸みFRP端カバー付きAU726）
     if (!isGreenCar) {
-      this._attachDetailedAcUnit(carGroup, 0, 3.74, 4.35);
+      const acLen = series === 'YAMANOTE' ? 5.15 : 4.35;
+      this._attachDetailedAcUnit(carGroup, 0, 3.74, acLen, series);
     } else {
-      this._attachDetailedAcUnit(carGroup, -6.9, 4.02, 2.75);
-      this._attachDetailedAcUnit(carGroup, 6.9, 4.02, 2.75);
+      this._attachDetailedAcUnit(carGroup, -6.9, 4.02, 2.75, series);
+      this._attachDetailedAcUnit(carGroup, 6.9, 4.02, 2.75, series);
     }
 
     if (hasPantograph) {
-      this._attachPantograph(carGroup, series, -5.6);
+      this._attachPantograph(carGroup, series, -5.6, false);
+      // E233系・E235系のモハ（3号車相当）は実車通り「予備パンタグラフ」を含む2基搭載（折り畳み姿勢）！
+      if ((series === 'KEIHIN' || series === 'YAMANOTE') && carIndex === 2) {
+        this._attachPantograph(carGroup, series, 5.6, true);
+      }
     }
 
     // 3. 精密ボルスタレス台車 ＆ 個別床下機器箱
@@ -2369,12 +2743,26 @@ export class RollingStockFactory {
     return carGroup;
   }
 
-  _attachDetailedAcUnit(parent, zCenter, yBase, length) {
+  _attachDetailedAcUnit(parent, zCenter, yBase, length, series = 'E531') {
     const acGroup = new THREE.Group();
     acGroup.position.set(0, yBase, zCenter);
 
     const mainBox = new THREE.Mesh(new THREE.BoxGeometry(2.14, 0.30, length), this.acCaseMat);
     acGroup.add(mainBox);
+
+    // E233/E235/E531のAU726B/AU737特有のエアロ丸みFRP前後エンドキャップ
+    if (series === 'KEIHIN' || series === 'YAMANOTE' || series === 'E531') {
+      for (const ez of [-1, 1]) {
+        const cap = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.15, 0.15, 2.12, 10, 1, false, 0, Math.PI),
+          this.acCaseMat
+        );
+        cap.rotation.z = Math.PI / 2;
+        if (ez < 0) cap.rotation.y = Math.PI;
+        cap.position.set(0, 0, ez * (length * 0.5));
+        acGroup.add(cap);
+      }
+    }
 
     const sideGrille = new THREE.Mesh(
       new THREE.BoxGeometry(2.17, 0.14, length * 0.62),
@@ -2441,9 +2829,21 @@ export class RollingStockFactory {
     }
   }
 
-  _attachPantograph(parent, series, zPos) {
+  _attachPantograph(parent, series, zPos, folded = false) {
     const pGroup = new THREE.Group();
     pGroup.position.set(0, 3.62, zPos);
+
+    if (folded) {
+      // 折り畳み待機中の予備シングルアームパンタグラフ（E233/E235 3号車）
+      const foldedFrame = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.14, 1.35), this.skirtWhiteMat);
+      foldedFrame.position.set(0, 0.16, 0);
+      pGroup.add(foldedFrame);
+      const foldedShoe = new THREE.Mesh(new THREE.BoxGeometry(1.62, 0.05, 0.24), this.skirtWhiteMat);
+      foldedShoe.position.set(0, 0.26, 0.12);
+      pGroup.add(foldedShoe);
+      parent.add(pGroup);
+      return;
+    }
 
     const lowerArm = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.95, 0.11), this.skirtWhiteMat);
     lowerArm.position.set(0, 0.42, -0.25);
@@ -2488,42 +2888,77 @@ export class RollingStockFactory {
       noseGroup.rotation.y = Math.PI;
     }
 
+    const isE235 = series === 'YAMANOTE';
     const frpShellMat =
       noseShroudMat ||
-      (series === 'YAMANOTE'
-        ? this.frpMats.black
-        : series === 'E531'
+      (isE235
+        ? this.stainlessMat
+        : series === 'E531' || series === 'KEIHIN'
           ? this.frpMats.white
           : this.frpMats.pearl);
 
-    // 1. 裾絞り＋丸屋根と完全一致する立体FRP先頭シェル＆前面キャップ（浮き・飛び出しゼロ・側面帯シームレス回り込み）
-    const shroudMesh = new THREE.Mesh(this.noseShroudGeo, frpShellMat);
+    // 1. 裾絞り＋丸屋根と完全一致する立体FRP先頭シェル＆前面キャップ（E235はフラット角丸ベゼル専用形状！）
+    const shroudMesh = new THREE.Mesh(
+      isE235 ? this.e235NoseShroudGeo : this.noseShroudGeo,
+      frpShellMat
+    );
     shroudMesh.castShadow = true;
     noseGroup.add(shroudMesh);
 
-    const capMesh = new THREE.Mesh(this.noseCapGeo, frontMat);
+    const capMesh = new THREE.Mesh(isE235 ? this.e235NoseCapGeo : this.noseCapGeo, frontMat);
     noseGroup.add(capMesh);
 
-    const zFront = this.noseZFrontOfY;
+    const zFront = isE235 ? this.e235ZFrontOfY : this.noseZFrontOfY;
 
-    // 2. 立体ワイパー（E231はimage_3.png通りガラス下縁に沿う低位置・斜めアーム配置）
-    const wiperY = series === 'E231' ? 2.13 : 2.26;
-    const wiperRot = series === 'E231' ? -0.11 : 0.14;
-    for (const wx of [-0.38, 0.34]) {
-      const wiper = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.024, 0.024), this.bogieMat);
-      wiper.position.set(wx, wiperY, zFront(wiperY) - 0.018);
-      wiper.rotation.z = wiperRot;
-      noseGroup.add(wiper);
+    // 2. 立体ワイパー（E233系は象徴的な「予備ワイパーを含む3本ワイパー」！E235は黒スリットから立つ2本パンタワイパー！）
+    if (series === 'KEIHIN') {
+      const wiperDefs = [
+        { x: 0.56, y: 2.28, rot: 0.12, len: 0.72 },  // 運転士主ワイパー
+        { x: 0.08, y: 2.28, rot: 0.12, len: 0.70 },  // E233名物・運転士予備ワイパー！
+        { x: -0.58, y: 2.26, rot: -0.10, len: 0.68 }, // 助士側ワイパー
+      ];
+      for (const wd of wiperDefs) {
+        const wMesh = new THREE.Mesh(new THREE.BoxGeometry(0.022, wd.len, 0.024), this.bogieMat);
+        wMesh.position.set(wd.x, wd.y, zFront(wd.y) - 0.018);
+        wMesh.rotation.z = wd.rot;
+        noseGroup.add(wMesh);
+      }
+    } else if (isE235) {
+      for (const [wx, rot] of [
+        [0.44, 0.08],
+        [-0.42, 0.08],
+      ]) {
+        const wMesh = new THREE.Mesh(new THREE.BoxGeometry(0.022, 0.70, 0.022), this.bogieMat);
+        wMesh.position.set(wx, 2.34, zFront(2.34) - 0.016);
+        wMesh.rotation.z = rot;
+        noseGroup.add(wMesh);
+      }
+    } else {
+      const wiperY = series === 'E231' ? 2.13 : 2.26;
+      const wiperRot = series === 'E231' ? -0.11 : 0.14;
+      for (const wx of [-0.38, 0.34]) {
+        const wiper = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.024, 0.024), this.bogieMat);
+        wiper.position.set(wx, wiperY, zFront(wiperY) - 0.018);
+        wiper.rotation.z = wiperRot;
+        noseGroup.add(wiper);
+      }
     }
 
-    // 3. 屋根上列車無線アンテナ＆信号炎管（image_3.png の先頭屋根機器配置）
+    // 3. 屋根上列車無線アンテナ＆信号炎管（E233/E235はデジタル無線2本アンテナ！）
     const ant1 = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.075, 0.36, 8), this.antMat);
     ant1.position.set(0.54, 3.74, 0.58);
     noseGroup.add(ant1);
 
-    const ant2 = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.075, 0.26, 8), this.roofMat);
-    ant2.position.set(-0.62, 3.71, 0.82);
+    const ant2 = new THREE.Mesh(new THREE.CylinderGeometry(0.050, 0.075, 0.32, 8), this.antMat);
+    ant2.position.set(-0.56, 3.73, 0.68);
     noseGroup.add(ant2);
+
+    if (series === 'KEIHIN' || isE235) {
+      // WiMAX / ATACS / デジタル列車無線円盤アンテナ
+      const discAnt = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.16, 0.08, 12), this.acCaseMat);
+      discAnt.position.set(0, 3.66, 1.55);
+      noseGroup.add(discAnt);
+    }
 
     // 4. 実車準拠の奥まった床下端梁空間 (y = 0.76..1.00m) ＋ 吊り支柱 ＋ ジャンパ栓・空気コック
     const endBeam = new THREE.Mesh(new THREE.BoxGeometry(2.36, 0.16, 0.28), this.bogieMat);
@@ -2531,18 +2966,15 @@ export class RollingStockFactory {
     noseGroup.add(endBeam);
 
     for (const sx of [-0.94, 0.94]) {
-      // スカート吊り下げ鋼製ブラケット支柱（image_3.png でスカート上端奥に見える黒支柱！）
       const strut = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.34, 0.18), this.bogieMat);
       strut.position.set(sx, 0.84, -0.11);
       noseGroup.add(strut);
 
-      // 左右端梁のジャンパ連結器受・乗務員ステップ
       const jumperBox = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.14, 0.18), this.couplerDarkMat);
       jumperBox.position.set(sx * 0.68, 0.88, -0.15);
       noseGroup.add(jumperBox);
     }
 
-    // 向かって左下（+X側）の赤色ブレーキ管コックアクセント（image_3.png 左スカート脇に見える赤コック！）
     const redCock = new THREE.Mesh(
       new THREE.BoxGeometry(0.06, 0.08, 0.08),
       this.insulatorRedMat
@@ -2550,11 +2982,19 @@ export class RollingStockFactory {
     redCock.position.set(1.23, 0.64, -0.06);
     noseGroup.add(redCock);
 
-    // 5. 3D一体折り曲げ造形 V字開口強化型スカート（y = 0.37..0.76m、中央が大きく開いて連結器と電連がくっきり見える！）
+    // 5. 3D一体折り曲げ造形 V字開口強化型スカート（E235は中央ダークグレー＋両翼シルバーホワイトの2トーン！）
     const skirtMesh = new THREE.Mesh(this.vNotchSkirtGeo, this.skirtWhiteMat);
     skirtMesh.castShadow = true;
     skirtMesh.receiveShadow = true;
     noseGroup.add(skirtMesh);
+    if (isE235) {
+      const centerDarkTrim = new THREE.Mesh(
+        new THREE.BoxGeometry(0.86, 0.11, 0.06),
+        this.bogieMat
+      );
+      centerDarkTrim.position.set(0, 0.42, -0.255);
+      noseGroup.add(centerDarkTrim);
+    }
 
     // 6. 精密立体 柴田式密着連結器（胴受・連結器本体・連結顎・下部電気連結器「電連」）
     const draftGear = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.20, 0.28), this.bogieMat);
@@ -2575,20 +3015,22 @@ export class RollingStockFactory {
     couplerJaw.position.set(0.05, 0.76, -0.52);
     noseGroup.add(couplerJaw);
 
-    // 連結器直下の丸みを帯びた電気連結器（電連 — image_3.png のV字開口中央に鎮座する箱！）
-    const elecCoupler = new THREE.Mesh(
-      new THREE.BoxGeometry(0.36, 0.15, 0.32),
-      this.couplerDarkMat
-    );
-    elecCoupler.position.set(0, 0.57, -0.34);
-    noseGroup.add(elecCoupler);
+    if (series !== 'KEIHIN' && !isE235) {
+      // E531 / E231 併結用の電気連結器（電連；山手E235・京浜東北E233は固定10/11連のため電連なしの実車仕様！）
+      const elecCoupler = new THREE.Mesh(
+        new THREE.BoxGeometry(0.36, 0.15, 0.32),
+        this.couplerDarkMat
+      );
+      elecCoupler.position.set(0, 0.57, -0.34);
+      noseGroup.add(elecCoupler);
 
-    const elecFrontCap = new THREE.Mesh(
-      new THREE.BoxGeometry(0.30, 0.12, 0.06),
-      this.underEquipMat
-    );
-    elecFrontCap.position.set(0, 0.57, -0.51);
-    noseGroup.add(elecFrontCap);
+      const elecFrontCap = new THREE.Mesh(
+        new THREE.BoxGeometry(0.30, 0.12, 0.06),
+        this.underEquipMat
+      );
+      elecFrontCap.position.set(0, 0.57, -0.51);
+      noseGroup.add(elecFrontCap);
+    }
 
     // 7. 3D前照灯・尾灯（前面キャップ上のUV座標と1mmのズレもなく一致する実寸配置！）
     if (showHeadlights) {
@@ -2596,14 +3038,13 @@ export class RollingStockFactory {
         const ly = 3.24;
         for (const lx of [-1.02, 1.02]) {
           const upperHid = new THREE.Mesh(
-            new THREE.SphereGeometry(0.072, 10, 8),
+            new THREE.SphereGeometry(0.068, 10, 8),
             this.hidBloomMat
           );
           upperHid.position.set(lx, ly, zFront(ly) - 0.015);
           noseGroup.add(upperHid);
         }
       } else if (series === 'E231') {
-        // y_px=895 -> ly=1.315m, innerX=±246px -> lx=±0.687m（帯下の黒ライトケース内に完全一致！）
         const ly = 1.315;
         for (const lx of [-0.687, 0.687]) {
           const bezel = new THREE.Mesh(
@@ -2620,24 +3061,28 @@ export class RollingStockFactory {
           lowHalogen.position.set(lx, ly, zFront(ly) - 0.014);
           noseGroup.add(lowHalogen);
         }
-      } else if (series === 'YAMANOTE') {
-        const ly = 3.24;
-        for (const lx of [-0.98, 0.98]) {
-          const ymLed = new THREE.Mesh(
-            new THREE.BoxGeometry(0.16, 0.12, 0.04),
-            this.hidBloomMat
-          );
-          ymLed.position.set(lx, ly, zFront(ly) - 0.015);
-          noseGroup.add(ymLed);
+      } else if (isE235) {
+        // E235系0番台：左右3眼独立スクエアホワイトLEDヘッドライト素子！
+        const ly = 3.245;
+        for (const side of [-1, 1]) {
+          const baseLx = side * 1.015;
+          for (let k = -1; k <= 1; k++) {
+            const ledElem = new THREE.Mesh(
+              new THREE.BoxGeometry(0.044, 0.062, 0.024),
+              this.hidBloomMat
+            );
+            ledElem.position.set(baseLx + k * 0.058, ly, zFront(ly) - 0.014);
+            noseGroup.add(ledElem);
+          }
         }
       }
     } else {
       const tailY = series === 'E231' ? 1.315 : 3.24;
-      const tailX = series === 'E231' ? 0.972 : 0.89;
+      const tailX = series === 'E231' ? 0.972 : isE235 ? 0.85 : 0.89;
       for (const tx of [-tailX, tailX]) {
         const tl = new THREE.Mesh(
-          series === 'E231'
-            ? new THREE.BoxGeometry(0.16, 0.10, 0.024)
+          series === 'E231' || isE235
+            ? new THREE.BoxGeometry(isE235 ? 0.09 : 0.16, isE235 ? 0.055 : 0.10, 0.024)
             : new THREE.SphereGeometry(0.055, 8, 8),
           this.tailRedMat
         );

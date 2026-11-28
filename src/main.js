@@ -102,7 +102,7 @@ atmosphere.onPresetChange((preset) => {
 scenery.setWindowGlowMultiplier(atmosphere.currentPreset.windowGlowMultiplier);
 
 const physics = new TrainPhysics(route);
-const cabView = new DriverCabView(scene, camera);
+const cabView = new DriverCabView(scene, camera, route, scenery.rollingStock);
 const sound = new TrainSoundEngine();
 const announcements = new AnnouncementAndCalloutSystem(sound, commsCaption);
 
@@ -246,7 +246,7 @@ function startDrivingSession() {
   sound.init();
   startOverlay.classList.add('hidden');
   hudLayer.classList.remove('hidden');
-  showToast('日暮里駅 4番線 — ブレーキを緩め、P1〜P5で発車してください（S / ↓キー）', 4800);
+  showToast('日暮里駅 4番線 — ドラッグまたは←/→キーで運転室・客室を360°見回せます！', 4800);
 }
 
 btnStartDrive.addEventListener('click', startDrivingSession);
@@ -278,11 +278,12 @@ function setTheWorld(active, { silentToast = false } = {}) {
 
   if (active) {
     frozenElapsed = clock.elapsedTime;
+    cabView._updatePlayerConsist(physics.distance);
     scene.updateMatrixWorld(true);
     camera.getWorldPosition(_specWorldPos);
     camera.getWorldQuaternion(_specWorldQuat);
 
-    // 運転席マウントから切り離してワールド自由カメラへ（一切ジャンプせずシームレス移行）
+    // 運転席マウントから切り離してワールド自由カメラへ（少し外へ出れば自分のE531系10両編成の外観を360°鑑賞可能！）
     scene.add(camera);
     camera.position.copy(_specWorldPos);
     _specEuler.setFromQuaternion(_specWorldQuat, 'YXZ');
@@ -291,7 +292,7 @@ function setTheWorld(active, { silentToast = false } = {}) {
     camera.rotation.order = 'YXZ';
     camera.rotation.set(specPitch, specYaw, 0);
 
-    cabView.cabInterior.visible = false;
+    cabView.setSpectatorMode(true);
     sound.setTimeStopped(true);
     announcements.cancelAll();
 
@@ -301,13 +302,13 @@ function setTheWorld(active, { silentToast = false } = {}) {
     theWorldBanner.classList.remove('hidden');
     syncWorldSpeedHud();
     if (!silentToast) {
-      showToast('ザ・ワールド発動 — 時よ止まれ！（WASD移動・E/Q昇降・ドラッグ視点・Tで解除）', 4200);
+      showToast('ザ・ワールド発動 — 自列車E531系10両編成も外から鑑賞できます！（WASD移動・Tで解除）', 4200);
     }
   } else {
     cabView.eyeHolder.add(camera);
     camera.position.set(0, 0, 0);
     camera.rotation.set(0, 0, 0);
-    cabView._applyViewMode();
+    cabView.setSpectatorMode(false);
     sound.setTimeStopped(false);
 
     btnToggleWorld.classList.remove('active');
@@ -840,6 +841,7 @@ if (btnToggleWeather) {
 
 function handleToggleWiper() {
   sound.init();
+  sound.playSwitchClick();
   const active = cabView.toggleWiper();
   sound.playWiperBlade(1);
   syncWeatherAndLightButtons();
@@ -853,6 +855,8 @@ if (btnToggleWiper) {
 }
 
 function handleToggleBeam() {
+  sound.init();
+  sound.playSwitchClick();
   const mode = cabView.toggleHeadlightBeam();
   syncWeatherAndLightButtons();
   broadcastCockpitTelemetry(null, true);
@@ -869,6 +873,8 @@ if (btnToggleBeam) {
 }
 
 function handleToggleSnowBrake() {
+  sound.init();
+  sound.playSwitchClick();
   const on = physics.toggleSnowBrake();
   broadcastCockpitTelemetry(null, true);
   showToast(on ? '耐雪ブレーキ：ON（制輪子予熱圧保持）' : '耐雪ブレーキ：OFF', 2400);
@@ -967,7 +973,7 @@ function handleDoorToggle() {
 }
 btnDoors.addEventListener('click', handleDoorToggle);
 
-// --- キーボード操作（ワンハンドル直感キー ＆ BVE互換キー ＆ ザ・ワールド自由移動） ---
+// --- キーボード操作（ワンハンドル直感キー ＆ 360°視点キー ＆ ザ・ワールド自由移動） ---
 const SPEC_KEYS = new Set([
   'KeyW',
   'KeyA',
@@ -1050,6 +1056,29 @@ window.addEventListener('keydown', (e) => {
       e.preventDefault();
       heldKeys.add(e.code);
     }
+    return;
+  }
+
+  // 運転中の 360° キーボード見回し（← / → で水平360°回転、Shift + ↑ / ↓ で上下チルト、C で正面リセット）
+  if (
+    e.code === 'ArrowLeft' ||
+    e.code === 'ArrowRight' ||
+    e.code === 'ShiftLeft' ||
+    e.code === 'ShiftRight'
+  ) {
+    e.preventDefault();
+    heldKeys.add(e.code);
+    return;
+  }
+  if ((e.code === 'ArrowUp' || e.code === 'ArrowDown') && e.shiftKey) {
+    e.preventDefault();
+    heldKeys.add(e.code);
+    return;
+  }
+  if (e.code === 'KeyC' && !e.repeat) {
+    e.preventDefault();
+    cabView.resetLookOffset();
+    showToast('視点を正面へリセットしました', 1600);
     return;
   }
 
@@ -1165,7 +1194,7 @@ window.addEventListener('blur', () => {
   heldKeys.clear();
 });
 
-// --- マウスドラッグ視点回転 ＆ ホイール移動速度調整 ---
+// --- マウスドラッグ 360° 視点回転 ＆ ホイール移動速度調整 ---
 let isDraggingLook = false;
 let prevPointerX = 0;
 let prevPointerY = 0;
@@ -1186,7 +1215,7 @@ window.addEventListener('pointermove', (e) => {
     specYaw -= dx * 0.0032;
     specPitch = THREE.MathUtils.clamp(specPitch - dy * 0.0032, -1.52, 1.52);
   } else {
-    cabView.addLookOffset(-dx * 0.0022, -dy * 0.0022);
+    cabView.addLookOffset(-dx * 0.0032, -dy * 0.0030);
   }
 });
 
@@ -1345,7 +1374,16 @@ function stepFrame({ skipRender = false, fixedDt = null } = {}) {
     sound.playPassingTrainWhoosh();
   });
 
-  // 4. 3D運転台・6自由度サスペンション・駅照明連動・ワイパー・3D計器盤更新
+  // 4. 3D運転台・360°見回し・6自由度サスペンション・駅照明連動・ワイパー・3D計器盤更新
+  const yawKey = (heldKeys.has('ArrowLeft') ? 1 : 0) - (heldKeys.has('ArrowRight') ? 1 : 0);
+  const pitchKey =
+    heldKeys.has('ShiftLeft') || heldKeys.has('ShiftRight')
+      ? (heldKeys.has('ArrowUp') ? 1 : 0) - (heldKeys.has('ArrowDown') ? 1 : 0)
+      : 0;
+  if (yawKey !== 0 || pitchKey !== 0) {
+    cabView.addLookOffset(yawKey * 1.85 * dt, pitchKey * 1.35 * dt);
+  }
+
   cabView.update(dt, elapsed, {
     ...physState,
     notch: physics.currentNotch,
@@ -1360,12 +1398,14 @@ function stepFrame({ skipRender = false, fixedDt = null } = {}) {
     },
   });
 
-  // 5. Web Audio 連続走行音更新
+  // 5. Web Audio 連続走行音更新（VVVF・転動・鉄橋・フランジ・雨音・低速制輪子摩擦・CP空気圧縮機）
   sound.update({
     speedKmh: physState.speedKmh,
     motorEffort: physState.motorEffort,
     zoneType: physState.zone.type,
     curvature: physState.frame.curvature,
+    bcPressure: physState.bcPressure,
+    mrPressure: physState.mrPressure,
   });
 
   // 6. HUD 表示 ＆ 別窓計器パネル（SideCar）テレメトリ同期
@@ -1458,6 +1498,7 @@ window.__sim = {
       notch: physics.currentNotch.id,
       notchIndex: physics.notchIndex,
       bcPressure: physics.bcPressure,
+      mrPressure: physics.mrPressure,
       atsPatternSpeedKmh: physics.atsPatternSpeedKmh,
       atsPatternApproach: physics.atsPatternApproach,
       atsBrakeActive: physics.atsBrakeActive,
@@ -1465,6 +1506,9 @@ window.__sim = {
       weatherMode: atmosphere.weatherMode,
       wiperActive: cabView.wiperActive,
       headlightMode: cabView.headlightMode,
+      lookYaw: cabView.lookYawOffset,
+      lookPitch: cabView.lookPitchOffset,
+      playerCarCount: cabView.playerCars ? cabView.playerCars.length : 0,
       stationLightLevel: cabView.stationLightLevel,
       roadVehicleCount: scenery.roadVehicles.length,
       renderCalls: renderer.info.render.calls,
@@ -1522,10 +1566,18 @@ window.__sim = {
   testAllSounds() {
     sound.init();
     sound.setRainIntensity(1.0);
-    sound.update({ speedKmh: 12, motorEffort: 0.85, zoneType: 'viaduct_ballast', curvature: 0.0025 });
+    sound.update({
+      speedKmh: 8,
+      motorEffort: -0.5,
+      zoneType: 'viaduct_ballast',
+      curvature: 0.0025,
+      bcPressure: 210,
+      mrPressure: 790,
+    });
     sound.update({ speedKmh: 36, motorEffort: 0.9, zoneType: 'truss_bridge', curvature: 0 });
     sound.update({ speedKmh: 52, motorEffort: -0.65, zoneType: 'viaduct_ballast', curvature: 0 });
     sound.setRainIntensity(0.0);
+    sound.playSwitchClick();
     sound.playNotchClick('normal');
     sound.playNotchClick('neutral');
     sound.playNotchClick('eb');
