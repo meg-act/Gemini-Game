@@ -70,19 +70,36 @@
             </div>
             <div class="config-group" style="grid-column: 1 / -1">
               <label class="config-label">実録サンプリング音源（任意 · src/audio/samples/ 同梱またはここで直接読込）</label>
-              <div class="seg-buttons" style="align-items: center; gap: 10px">
-                <button type="button" class="seg-btn" id="btn-load-samples">
-                  音源ファイルを選択 (.wav / .mp3 / .ogg)
+              <div class="ctrl-start-row">
+                <span id="sample-status-label" class="ctrl-status-pill">
+                  未選択 — 配置または選択した音源 (.wav / .mp3 / .ogg) から自動で実音再生へ切り替わります
+                </span>
+                <button type="button" class="seg-btn ctrl-open-btn" id="btn-load-samples">
+                  音源ファイルを選択
                 </button>
                 <input type="file" id="input-audio-samples" multiple accept="audio/*" hidden />
-                <span id="sample-status-label" style="font-size: 12px; opacity: 0.82">
-                  未選択（配置または選択した音源から自動で実音再生へ切り替わります）
+              </div>
+            </div>
+
+            <div class="config-group" style="grid-column: 1 / -1">
+              <label class="config-label">
+                専用マスコン接続（PS『電車でGO!』コントローラー ＋ ELECOM JC-PS101USV / USBマスコン対応）
+              </label>
+              <div class="ctrl-start-row">
+                <span id="start-ctrl-badge" class="ctrl-status-pill">
+                  未検出 — USB接続後、A/B/STARTボタンを押すかハンドルを動かすと自動認識します
                 </span>
+                <button type="button" class="seg-btn ctrl-open-btn" id="btn-open-ctrl-start">
+                  コントローラー設定・動作確認
+                </button>
               </div>
             </div>
           </div>
 
           <div class="controls-summary">
+            <div class="key-item" style="grid-column: 1 / -1">
+              <kbd>電車でGO!</kbd> 全15段直結 · <kbd>A</kbd> 電笛 · <kbd>B</kbd> 空笛 · <kbd>C</kbd> 扉/EBリセット · <kbd>SELECT</kbd> 駅メロ · <kbd>START</kbd> 視点
+            </div>
             <div class="key-item"><kbd>S</kbd> / <kbd>↓</kbd> 手前に引く（ブレーキ解除・加速 P1〜P5）</div>
             <div class="key-item"><kbd>W</kbd> / <kbd>↑</kbd> 奥に押す（力行解除・制動 B1〜B8）</div>
             <div class="key-item"><kbd>Space</kbd> 惰行 (N) · <kbd>BS</kbd>/<kbd>E</kbd> 非常 · <kbd>X</kbd> EBリセット</div>
@@ -129,6 +146,15 @@
               <option value="golden_hour">黄金色の夕暮れ</option>
               <option value="twilight">群青の薄暮</option>
             </select>
+
+            <button
+              type="button"
+              id="btn-open-ctrl-hud"
+              class="hud-tool-btn"
+              title="『電車でGO!』コントローラー設定・入力モニター・初期調整"
+            >
+              マスコン設定
+            </button>
 
             <button type="button" id="btn-toggle-weather" class="hud-tool-btn" title="天候切替 (R)">
               天候: 晴 (R)
@@ -246,6 +272,132 @@
       <button type="button" id="btn-restore-hud" class="restore-hud-btn hidden" title="HUDを再表示 (Tab)">
         HUD表示 (Tab)
       </button>
+
+      <!-- 『電車でGO!』専用コントローラー（JC-PS101USV / USBマスコン）設定・リアルタイムモニター・初期調整モーダル -->
+      <section
+        id="controller-modal"
+        class="ctrl-modal-backdrop hidden"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="ctrl-modal-title"
+      >
+        <div class="ctrl-modal-card">
+          <header class="ctrl-modal-header">
+            <div>
+              <p class="ctrl-modal-kicker">DENSHA DE GO! CONTROLLER · ELECOM JC-PS101USV · MAC USB-C HUB</p>
+              <h2 id="ctrl-modal-title">『電車でGO!』コントローラー設定 ＆ 動作確認モニター</h2>
+            </div>
+            <button type="button" id="btn-close-ctrl-modal" class="ctrl-close-btn" title="閉じる (Esc)">
+              閉じる
+            </button>
+          </header>
+
+          <!-- 1. 接続ステータス ＆ 変換機プロファイル -->
+          <div class="ctrl-section">
+            <div class="ctrl-conn-row">
+              <div id="ctrl-modal-status" class="ctrl-conn-status">
+                未検出 — コントローラー→JC-PS101USV→USBハブ→Macを接続し、A / B / START のいずれかを押してください
+              </div>
+              <div class="ctrl-conn-actions">
+                <button type="button" id="btn-ctrl-sync-now" class="ctrl-action-btn">
+                  ハンドル位置を再同期
+                </button>
+                <button type="button" id="btn-ctrl-webhid" class="ctrl-action-btn">
+                  WebHID 直接接続 (Chrome用)
+                </button>
+              </div>
+            </div>
+
+            <div class="ctrl-select-grid">
+              <label class="ctrl-field">
+                <span>変換アダプタ / 入力プロファイル</span>
+                <select id="ctrl-profile-select"></select>
+              </label>
+              <label class="ctrl-field">
+                <span>ブレーキ段数モード（ワンハンドル / 2ハンドル）</span>
+                <select id="ctrl-brake-curve-select"></select>
+              </label>
+            </div>
+          </div>
+
+          <!-- 2. リアルタイム入力モニター（ハンドル15段 ＆ 5ボタン点灯テスト） -->
+          <div class="ctrl-section">
+            <div class="ctrl-section-head">
+              <span class="ctrl-section-title">リアルタイム入力モニター（ハンドルを動かして各段の認識を確認できます）</span>
+              <span id="ctrl-live-notch-badge" class="ctrl-live-badge">---</span>
+            </div>
+            <div id="ctrl-live-notches" class="ctrl-notch-strip"></div>
+            <div class="ctrl-btn-lamps" id="ctrl-live-buttons">
+              <span class="ctrl-lamp" data-lamp="a">A (□)</span>
+              <span class="ctrl-lamp" data-lamp="b">B (×)</span>
+              <span class="ctrl-lamp" data-lamp="c">C (○)</span>
+              <span class="ctrl-lamp" data-lamp="select">SELECT</span>
+              <span class="ctrl-lamp" data-lamp="start">START</span>
+            </div>
+            <div id="ctrl-raw-debug" class="ctrl-raw-debug">
+              Raw Buttons: [] ｜ Axes: [] ｜ Brake4bit: -- ｜ Mascon3bit: --
+            </div>
+          </div>
+
+          <!-- 3. 実機キャリブレーション（初期調整ウィザード） -->
+          <div class="ctrl-section">
+            <div class="ctrl-section-head">
+              <span class="ctrl-section-title">かんたん実機学習（万一ノッチやボタン番号がズレる場合のみ実行）</span>
+            </div>
+            <div id="ctrl-cal-idle" class="ctrl-cal-row">
+              <button type="button" id="btn-cal-notches" class="ctrl-action-btn accent">
+                ハンドル全15段を実機学習
+              </button>
+              <button type="button" id="btn-cal-buttons" class="ctrl-action-btn">
+                ボタン5種 (A/B/C/SEL/START) を学習
+              </button>
+              <button type="button" id="btn-cal-reset" class="ctrl-action-btn subtle">
+                学習データをリセット
+              </button>
+            </div>
+            <div id="ctrl-cal-wizard" class="ctrl-cal-wizard hidden">
+              <p id="ctrl-cal-prompt" class="ctrl-cal-prompt"></p>
+              <div class="ctrl-cal-wiz-btns">
+                <button type="button" id="btn-cal-capture" class="ctrl-action-btn accent">
+                  この位置を記録 (Enter)
+                </button>
+                <button type="button" id="btn-cal-cancel" class="ctrl-action-btn subtle">
+                  キャンセル
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 4. 各ボタンの機能割り当て -->
+          <div class="ctrl-section">
+            <div class="ctrl-section-head">
+              <span class="ctrl-section-title">ボタン機能割り当て（自動保存）</span>
+            </div>
+            <div class="ctrl-remap-grid" id="ctrl-remap-grid">
+              <label class="ctrl-remap-row">
+                <span class="ctrl-btn-tag">A ボタン (□)</span>
+                <select data-ctrl-btn="a"></select>
+              </label>
+              <label class="ctrl-remap-row">
+                <span class="ctrl-btn-tag">B ボタン (×)</span>
+                <select data-ctrl-btn="b"></select>
+              </label>
+              <label class="ctrl-remap-row">
+                <span class="ctrl-btn-tag">C ボタン (○)</span>
+                <select data-ctrl-btn="c"></select>
+              </label>
+              <label class="ctrl-remap-row">
+                <span class="ctrl-btn-tag">SELECT</span>
+                <select data-ctrl-btn="select"></select>
+              </label>
+              <label class="ctrl-remap-row">
+                <span class="ctrl-btn-tag">START</span>
+                <select data-ctrl-btn="start"></select>
+              </label>
+            </div>
+          </div>
+        </div>
+      </section>
     </main>
 
     <script type="module" src="./src/main.js"></script>

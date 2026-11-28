@@ -17,6 +17,12 @@ import { DriverCabView } from './train/cabView.js';
 import { TrainSoundEngine } from './audio/soundEngine.js';
 import { AnnouncementAndCalloutSystem } from './audio/announcements.js';
 import { drawDriverMeterScreen } from './ui/meterRenderer.js';
+import {
+  DenGoControllerManager,
+  CONTROLLER_PROFILES,
+  BRAKE_CURVE_MODES,
+  BUTTON_ACTIONS,
+} from './input/dengoController.js';
 
 // --- DOM 要素参照 ---
 const canvas = document.getElementById('sim-canvas');
@@ -26,6 +32,30 @@ const hudLayer = document.getElementById('hud-layer');
 const btnRestoreHud = document.getElementById('btn-restore-hud');
 const statusToast = document.getElementById('status-toast');
 const commsCaption = document.getElementById('comms-caption');
+
+const startCtrlBadge = document.getElementById('start-ctrl-badge');
+const btnOpenCtrlStart = document.getElementById('btn-open-ctrl-start');
+const btnOpenCtrlHud = document.getElementById('btn-open-ctrl-hud');
+const controllerModal = document.getElementById('controller-modal');
+const btnCloseCtrlModal = document.getElementById('btn-close-ctrl-modal');
+const ctrlModalStatus = document.getElementById('ctrl-modal-status');
+const btnCtrlSyncNow = document.getElementById('btn-ctrl-sync-now');
+const btnCtrlWebHid = document.getElementById('btn-ctrl-webhid');
+const ctrlProfileSelect = document.getElementById('ctrl-profile-select');
+const ctrlBrakeCurveSelect = document.getElementById('ctrl-brake-curve-select');
+const ctrlLiveNotchBadge = document.getElementById('ctrl-live-notch-badge');
+const ctrlLiveNotches = document.getElementById('ctrl-live-notches');
+const ctrlLiveButtons = document.getElementById('ctrl-live-buttons');
+const ctrlRawDebug = document.getElementById('ctrl-raw-debug');
+const ctrlCalIdle = document.getElementById('ctrl-cal-idle');
+const ctrlCalWizard = document.getElementById('ctrl-cal-wizard');
+const ctrlCalPrompt = document.getElementById('ctrl-cal-prompt');
+const btnCalNotches = document.getElementById('btn-cal-notches');
+const btnCalButtons = document.getElementById('btn-cal-buttons');
+const btnCalReset = document.getElementById('btn-cal-reset');
+const btnCalCapture = document.getElementById('btn-cal-capture');
+const btnCalCancel = document.getElementById('btn-cal-cancel');
+const ctrlRemapGrid = document.getElementById('ctrl-remap-grid');
 
 const hudLineBadge = document.getElementById('hud-line-badge');
 const hudZoneLabel = document.getElementById('hud-zone-label');
@@ -704,6 +734,8 @@ if (btnPopoutPanel) {
   });
 }
 
+let isExternalPanelFocused = false;
+
 function handleIncomingCockpitMessage(data) {
   if (!data || typeof data !== 'object') return;
 
@@ -716,7 +748,13 @@ function handleIncomingCockpitMessage(data) {
 
   if (data.type === 'panel-bye') {
     isPanelConnected = false;
+    isExternalPanelFocused = false;
     syncPanelButton();
+    return;
+  }
+
+  if (data.type === 'panel-focus') {
+    isExternalPanelFocused = Boolean(data.focused);
     return;
   }
 
@@ -725,9 +763,13 @@ function handleIncomingCockpitMessage(data) {
       isPanelConnected = true;
       syncPanelButton();
     }
-    if (!isDrivingStarted) {
+    if (data.action === 'dengoAction') {
+      executeControllerAction(data.dengoAction, data.buttonKey);
+      return;
+    }
+    if (!isDrivingStarted && data.action !== 'setNotch') {
       startDrivingSession();
-    } else {
+    } else if (isDrivingStarted) {
       sound.init();
     }
 
@@ -735,17 +777,7 @@ function handleIncomingCockpitMessage(data) {
       case 'setNotch': {
         const idx = Number(data.index);
         if (Number.isInteger(idx) && idx >= 0 && idx < NOTCH_STEPS.length) {
-          if (physics.doorsOpen && idx > NEUTRAL_INDEX) {
-            showToast('戸閉保安作動中：扉を閉めてから力行してください', 2600);
-            return;
-          }
-          physics.notifyDriverActivity();
-          sound.setEbBuzzerActive(false);
-          if (physics.notchIndex !== idx) {
-            physics.notchIndex = idx;
-            syncNotchHud();
-            broadcastCockpitTelemetry(null, true);
-          }
+          applyControllerNotch(idx, { initialSync: Boolean(data.initialSync) });
         }
         break;
       }
@@ -1031,6 +1063,390 @@ function handleDoorToggle() {
 }
 btnDoors.addEventListener('click', handleDoorToggle);
 
+// =========================================================================
+// 『電車でGO!』専用コントローラー（ELECOM JC-PS101USV / USBマスコン）統合制御
+//   - ハンドル操作音は物理コントローラー自体の打鍵音に委ねるため、合成クリック音は一切鳴らさない
+//   - 物理ノッチ変化時は EB装置60秒無操作タイマーを自動クリアし、戸閉保安インターロックに連動
+// =========================================================================
+
+function isControllerModalOpen() {
+  return Boolean(controllerModal && !controllerModal.classList.contains('hidden'));
+}
+
+function applyControllerNotch(targetIdx, { initialSync = false } = {}) {
+  if (!Number.isInteger(targetIdx) || targetIdx < 0 || targetIdx >= NOTCH_STEPS.length) return;
+
+  physics.notifyDriverActivity();
+  sound.setEbBuzzerActive(false);
+  announcements.onEbEvent({ type: 'reset' });
+
+  if (physics.doorsOpen && targetIdx > NEUTRAL_INDEX) {
+    if (physics.notchIndex !== NEUTRAL_INDEX) {
+      physics.notchIndex = NEUTRAL_INDEX;
+      syncNotchHud();
+      broadcastCockpitTelemetry(null, true);
+    }
+    if (isDrivingStarted && !initialSync) {
+      showToast('戸閉保安作動中：CボタンまたはDキーで扉を閉めてから力行してください', 2600);
+    }
+    return;
+  }
+
+  if (physics.notchIndex !== targetIdx) {
+    physics.notchIndex = targetIdx;
+    syncNotchHud();
+    broadcastCockpitTelemetry(null, true);
+    if (targetIdx === 0 && isDrivingStarted && !initialSync) {
+      showToast('非常ブレーキ (EB) 投入', 2200);
+    }
+  }
+}
+
+function executeControllerAction(actionId, buttonKey) {
+  // モーダルを開いてボタン点灯テストを行っている間は運転操作を発火させない
+  if (isControllerModalOpen()) return;
+
+  if (!isDrivingStarted) {
+    if (buttonKey === 'start' || buttonKey === 'a' || actionId === 'horn_elec') {
+      startDrivingSession();
+    }
+    return;
+  }
+
+  sound.init();
+  switch (actionId) {
+    case 'horn_elec':
+      physics.notifyDriverActivity();
+      sound.setEbBuzzerActive(false);
+      announcements.onEbEvent({ type: 'reset' });
+      sound.playHorn('elec');
+      break;
+    case 'horn_air':
+      physics.notifyDriverActivity();
+      sound.setEbBuzzerActive(false);
+      announcements.onEbEvent({ type: 'reset' });
+      sound.playHorn('air');
+      break;
+    case 'context_door_eb':
+      if (physics.ebWarningActive || physics.ebBrakeActive || physics.speedKmh > 0.4) {
+        handleEbReset();
+      } else {
+        handleDoorToggle();
+      }
+      break;
+    case 'doors':
+      handleDoorToggle();
+      break;
+    case 'eb_reset':
+      handleEbReset();
+      break;
+    case 'melody':
+      handleDepartureMelody();
+      break;
+    case 'view_toggle':
+      handleToggleView();
+      break;
+    case 'the_world':
+      setTheWorld(!isTheWorldActive);
+      break;
+    case 'reset_look':
+      if (isTheWorldActive) {
+        specPitch = 0;
+      } else {
+        cabView.resetLookOffset();
+        showToast('視点を正面へリセットしました', 1600);
+      }
+      break;
+    case 'wiper':
+      handleToggleWiper();
+      break;
+    case 'headlight':
+      handleToggleBeam();
+      break;
+    case 'snow_brake':
+      handleToggleSnowBrake();
+      break;
+    default:
+      break;
+  }
+}
+
+const ctrlNotchCellEls = [];
+if (ctrlLiveNotches) {
+  NOTCH_STEPS.forEach((step) => {
+    const cell = document.createElement('div');
+    cell.className = `ctrl-notch-cell type-${step.type}`;
+    cell.textContent = step.id;
+    ctrlLiveNotches.appendChild(cell);
+    ctrlNotchCellEls.push(cell);
+  });
+}
+
+const ctrlLampEls = {};
+if (ctrlLiveButtons) {
+  ctrlLiveButtons.querySelectorAll('[data-lamp]').forEach((el) => {
+    ctrlLampEls[el.dataset.lamp] = el;
+  });
+}
+
+const dengo = new DenGoControllerManager({
+  onNotchChange: (idx, _id, meta) => {
+    applyControllerNotch(idx, { initialSync: Boolean(meta?.initialSync) });
+  },
+  onAction: (actionId, btnKey) => {
+    executeControllerAction(actionId, btnKey);
+  },
+  onConnectionChange: (info) => {
+    if (info.connected && isDrivingStarted) {
+      showToast(`コントローラー接続: ${info.id}`, 3200);
+    }
+    syncControllerBadges(dengo.getDiagnostics());
+  },
+});
+
+function populateControllerSelects() {
+  if (ctrlProfileSelect) {
+    ctrlProfileSelect.innerHTML = '';
+    for (const p of CONTROLLER_PROFILES) {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = p.label;
+      ctrlProfileSelect.appendChild(opt);
+    }
+    ctrlProfileSelect.value = dengo.profile;
+    ctrlProfileSelect.addEventListener('change', (e) => {
+      dengo.setProfile(e.target.value);
+      syncControllerModalMonitor(dengo.getDiagnostics());
+    });
+  }
+
+  if (ctrlBrakeCurveSelect) {
+    ctrlBrakeCurveSelect.innerHTML = '';
+    for (const m of BRAKE_CURVE_MODES) {
+      const opt = document.createElement('option');
+      opt.value = m.id;
+      opt.textContent = m.label;
+      ctrlBrakeCurveSelect.appendChild(opt);
+    }
+    ctrlBrakeCurveSelect.value = dengo.brakeCurveMode;
+    ctrlBrakeCurveSelect.addEventListener('change', (e) => {
+      dengo.setBrakeCurveMode(e.target.value);
+    });
+  }
+
+  if (ctrlRemapGrid) {
+    ctrlRemapGrid.querySelectorAll('select[data-ctrl-btn]').forEach((sel) => {
+      const key = sel.dataset.ctrlBtn;
+      sel.innerHTML = '';
+      for (const act of BUTTON_ACTIONS) {
+        const opt = document.createElement('option');
+        opt.value = act.id;
+        opt.textContent = act.label;
+        sel.appendChild(opt);
+      }
+      sel.value = dengo.buttonMap[key] || 'none';
+      sel.addEventListener('change', (e) => {
+        dengo.setButtonAction(key, e.target.value);
+      });
+    });
+  }
+
+  if (btnCtrlWebHid && !dengo.isWebHidSupported()) {
+    btnCtrlWebHid.classList.add('hidden');
+  }
+}
+populateControllerSelects();
+
+let _lastBadgeSummaryKey = '';
+
+function syncControllerBadges(diag) {
+  const notchStr = diag.confirmedNotchId || '---';
+  const summaryKey = `${diag.connected}|${diag.id}|${notchStr}|${diag.resolvedProfile}`;
+  if (summaryKey === _lastBadgeSummaryKey) return;
+  _lastBadgeSummaryKey = summaryKey;
+
+  if (startCtrlBadge) {
+    startCtrlBadge.classList.toggle('connected', diag.connected);
+    if (diag.connected) {
+      const shortName = diag.id.length > 36 ? `${diag.id.slice(0, 36)}…` : diag.id;
+      startCtrlBadge.textContent = `接続中: ${shortName} ｜ 現在ノッチ: ${notchStr}`;
+    } else {
+      startCtrlBadge.textContent =
+        '未検出 — USB接続後、A/B/STARTボタンを押すかハンドルを動かすと自動認識します';
+    }
+  }
+
+  if (btnOpenCtrlHud) {
+    btnOpenCtrlHud.classList.toggle('ctrl-connected', diag.connected);
+    btnOpenCtrlHud.textContent = diag.connected ? `マスコン: ${notchStr}` : 'マスコン設定';
+  }
+}
+
+function renderCalibrationWizardUi() {
+  const st = dengo.getCalibrationStatus();
+  if (!ctrlCalIdle || !ctrlCalWizard || !ctrlCalPrompt) return;
+
+  if (!st.active) {
+    ctrlCalIdle.classList.remove('hidden');
+    ctrlCalWizard.classList.add('hidden');
+    if (ctrlProfileSelect) ctrlProfileSelect.value = dengo.profile;
+    return;
+  }
+
+  ctrlCalIdle.classList.add('hidden');
+  ctrlCalWizard.classList.remove('hidden');
+
+  if (st.mode === 'notches') {
+    ctrlCalPrompt.textContent = `【ハンドル学習 ${st.stepIndex + 1} / ${st.totalSteps}】物理ハンドルを「${st.targetLabel}」の位置に止め、［この位置を記録］または Enter キーを押してください`;
+    btnCalCapture?.classList.remove('hidden');
+  } else {
+    ctrlCalPrompt.textContent = `【ボタン学習 ${st.stepIndex + 1} / ${st.totalSteps}】コントローラーの「${st.targetLabel}」を1回押してください（押すと自動で次へ進みます）`;
+    btnCalCapture?.classList.add('hidden');
+  }
+}
+
+dengo.calibrationWizard.onButtonStepUpdate = (st) => {
+  renderCalibrationWizardUi();
+  if (!st.active) {
+    showToast('ボタン5種 (A / B / C / SELECT / START) の実機学習を保存しました！', 3200);
+  }
+};
+
+function syncControllerModalMonitor(diag) {
+  if (!isControllerModalOpen()) return;
+
+  if (ctrlModalStatus) {
+    ctrlModalStatus.classList.toggle('connected', diag.connected);
+    if (diag.connected) {
+      ctrlModalStatus.textContent = `接続中 [${diag.source.toUpperCase()}]: ${diag.id} （適用方式: ${diag.resolvedProfile}）`;
+    } else {
+      ctrlModalStatus.textContent =
+        '未検出 — コントローラー→JC-PS101USV→USBハブ→Macを接続し、A / B / START のいずれかを押してください';
+    }
+  }
+
+  if (ctrlLiveNotchBadge) {
+    ctrlLiveNotchBadge.textContent = diag.confirmedNotchId || '---';
+  }
+
+  const activeIdx =
+    diag.confirmedNotchIndex !== null ? diag.confirmedNotchIndex : diag.rawNotchIndex;
+  for (let i = 0; i < ctrlNotchCellEls.length; i++) {
+    ctrlNotchCellEls[i].classList.toggle('active', i === activeIdx);
+  }
+
+  for (const key of ['a', 'b', 'c', 'select', 'start']) {
+    if (ctrlLampEls[key]) {
+      ctrlLampEls[key].classList.toggle('active', Boolean(diag.buttonsHeld?.[key]));
+    }
+  }
+
+  if (ctrlRawDebug) {
+    const bBin =
+      diag.brakeCode !== null && diag.brakeCode !== undefined
+        ? `${diag.brakeCode} (${diag.brakeCode.toString(2).padStart(4, '0')})`
+        : '--';
+    const axesStr = (diag.axes || []).map((v) => (v >= 0 ? `+${v.toFixed(2)}` : v.toFixed(2))).join(', ');
+    ctrlRawDebug.textContent = `Pressed: [${(diag.pressedIndices || []).join(', ')}] ｜ Axes: [${axesStr}] ｜ Brake4bit: ${bBin} ｜ Mascon: ${diag.powerPat || '--'} (${diag.dpadSource || '--'})`;
+  }
+}
+
+function openControllerModal() {
+  if (!controllerModal) return;
+  controllerModal.classList.remove('hidden');
+  renderCalibrationWizardUi();
+  syncControllerModalMonitor(dengo.getDiagnostics());
+}
+
+function closeControllerModal() {
+  if (!controllerModal) return;
+  dengo.cancelCalibration();
+  renderCalibrationWizardUi();
+  controllerModal.classList.add('hidden');
+}
+
+btnOpenCtrlStart?.addEventListener('click', openControllerModal);
+btnOpenCtrlHud?.addEventListener('click', () => {
+  openControllerModal();
+  btnOpenCtrlHud.blur();
+});
+btnCloseCtrlModal?.addEventListener('click', closeControllerModal);
+controllerModal?.addEventListener('click', (e) => {
+  if (e.target === controllerModal) closeControllerModal();
+});
+
+btnCtrlSyncNow?.addEventListener('click', () => {
+  dengo.syncCurrentNotchNow();
+  showToast('物理ハンドルの現在位置へ再同期しました', 2000);
+});
+
+btnCtrlWebHid?.addEventListener('click', async () => {
+  try {
+    const name = await dengo.connectWebHid();
+    if (name) {
+      showToast(`WebHID 直接接続に成功しました: ${name}`, 3400);
+      syncControllerModalMonitor(dengo.update(performance.now()));
+    }
+  } catch (err) {
+    showToast(`WebHID 接続エラー: ${err?.message || err}`, 4200);
+  }
+});
+
+function handleCaptureNotchCalibrationStep() {
+  const res = dengo.captureCalibrationNotchStep();
+  if (res?.error === 'no_controller') {
+    showToast('コントローラーが認識されていません。先にボタンを押して認識させてください。', 3200);
+    return;
+  }
+  renderCalibrationWizardUi();
+  if (res?.completed) {
+    showToast('ハンドル全15段 (EB〜P5) の実機キャリブレーションが完了しました！', 3800);
+  }
+}
+
+btnCalNotches?.addEventListener('click', () => {
+  if (!dengo.connected) {
+    showToast('先にコントローラーのボタンを押して接続を認識させてください', 3000);
+    return;
+  }
+  dengo.startHandleCalibration();
+  renderCalibrationWizardUi();
+});
+
+btnCalButtons?.addEventListener('click', () => {
+  if (!dengo.connected) {
+    showToast('先にコントローラーのボタンを押して接続を認識させてください', 3000);
+    return;
+  }
+  dengo.startButtonCalibration();
+  renderCalibrationWizardUi();
+});
+
+btnCalReset?.addEventListener('click', () => {
+  dengo.resetCalibration();
+  renderCalibrationWizardUi();
+  syncControllerModalMonitor(dengo.getDiagnostics());
+  showToast('キャリブレーション学習データをリセットし、自動判定モードに戻しました', 2800);
+});
+
+btnCalCapture?.addEventListener('click', handleCaptureNotchCalibrationStep);
+btnCalCancel?.addEventListener('click', () => {
+  dengo.cancelCalibration();
+  renderCalibrationWizardUi();
+});
+
+function pollControllerInput(nowMs = performance.now()) {
+  // 別窓 (panel.html) にOSフォーカスがある場合のみ別窓側のリレーに委ねて二重発火を防止
+  if (isExternalPanelFocused && typeof document.hasFocus === 'function' && !document.hasFocus()) {
+    return;
+  }
+  const diag = dengo.update(nowMs);
+  syncControllerBadges(diag);
+  if (isControllerModalOpen()) {
+    syncControllerModalMonitor(diag);
+  }
+}
+
 // --- キーボード操作（ワンハンドル直感キー ＆ 360°視点キー ＆ ザ・ワールド自由移動） ---
 const SPEC_KEYS = new Set([
   'KeyW',
@@ -1052,6 +1468,30 @@ const SPEC_KEYS = new Set([
 ]);
 
 window.addEventListener('keydown', (e) => {
+  // コントローラー設定モーダル表示中のキー操作（Escで閉じる、Enterでノッチ学習記録）
+  if (isControllerModalOpen()) {
+    if (e.code === 'Escape') {
+      e.preventDefault();
+      if (dengo.calibrationWizard.active) {
+        dengo.cancelCalibration();
+        renderCalibrationWizardUi();
+      } else {
+        closeControllerModal();
+      }
+      return;
+    }
+    if (
+      (e.code === 'Enter' || e.code === 'Space') &&
+      dengo.calibrationWizard.active &&
+      dengo.calibrationWizard.mode === 'notches'
+    ) {
+      e.preventDefault();
+      handleCaptureNotchCalibrationStep();
+      return;
+    }
+    return;
+  }
+
   if (!isDrivingStarted) {
     if (e.code === 'Enter' || e.code === 'Space') {
       e.preventDefault();
@@ -1374,6 +1814,9 @@ function updateSpectatorCamera(dt) {
 function stepFrame({ skipRender = false, fixedDt = null } = {}) {
   const rawDt = fixedDt !== null ? fixedDt : Math.min(clock.getDelta(), 0.1);
   const elapsed = clock.elapsedTime + (fixedDt !== null ? fixedDt : 0);
+
+  // 0. 『電車でGO!』専用コントローラー（JC-PS101USV / USBマスコン）毎フレーム入力監視
+  pollControllerInput(performance.now());
 
   // ザ・ワールド発動中：全物理・対向車・並走車・音声を完全停止し、自由スペクテイターカメラのみ駆動！
   if (isTheWorldActive) {
@@ -1747,6 +2190,55 @@ window.__sim = {
       e.setFromQuaternion(m.quaternion, 'YXZ');
       return Number(THREE.MathUtils.radToDeg(e.y).toFixed(2));
     });
+  },
+  setMockGamepad(mockState) {
+    dengo.setMockGamepad(mockState);
+  },
+  stepController(nowMs) {
+    const diag = dengo.update(nowMs);
+    syncControllerBadges(diag);
+    if (isControllerModalOpen()) {
+      syncControllerModalMonitor(diag);
+    }
+    return diag;
+  },
+  getControllerDiagnostics() {
+    return dengo.getDiagnostics();
+  },
+  setControllerProfile(profileId) {
+    dengo.setProfile(profileId);
+    if (ctrlProfileSelect) ctrlProfileSelect.value = dengo.profile;
+    return dengo.getDiagnostics();
+  },
+  setControllerBrakeCurve(modeId) {
+    dengo.setBrakeCurveMode(modeId);
+    if (ctrlBrakeCurveSelect) ctrlBrakeCurveSelect.value = dengo.brakeCurveMode;
+    return dengo.getDiagnostics();
+  },
+  openControllerModal() {
+    openControllerModal();
+  },
+  closeControllerModal() {
+    closeControllerModal();
+  },
+  startHandleCalibration() {
+    const st = dengo.startHandleCalibration();
+    renderCalibrationWizardUi();
+    return st;
+  },
+  captureCalibrationStep() {
+    handleCaptureNotchCalibrationStep();
+    return dengo.getCalibrationStatus();
+  },
+  startButtonCalibration() {
+    const st = dengo.startButtonCalibration();
+    renderCalibrationWizardUi();
+    return st;
+  },
+  resetCalibration() {
+    dengo.resetCalibration();
+    renderCalibrationWizardUi();
+    return dengo.getDiagnostics();
   },
 };
 

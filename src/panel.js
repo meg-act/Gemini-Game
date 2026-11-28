@@ -1,4 +1,5 @@
 import { drawDriverMeterScreen } from './ui/meterRenderer.js';
+import { DenGoControllerManager } from './input/dengoController.js';
 
 const CHANNEL_NAME = 'joban-sim-cockpit';
 const SNAPSHOT_KEY = 'joban-sim-cockpit-snapshot';
@@ -28,8 +29,7 @@ let brightnessStep = 0; // 0: 100%, 1: 82% (減光)
 
 const channel = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel(CHANNEL_NAME) : null;
 
-function sendCmd(action, payload = {}) {
-  const msg = { type: 'cmd', action, ...payload };
+function sendPacket(msg) {
   if (channel) {
     try {
       channel.postMessage(msg);
@@ -45,6 +45,27 @@ function sendCmd(action, payload = {}) {
     }
   }
 }
+
+function sendCmd(action, payload = {}) {
+  sendPacket({ type: 'cmd', action, ...payload });
+}
+
+// 別窓（SideCar）にOSフォーカスが移っている間も『電車でGO!』コントローラーの入力をメイン画面へシームレス転送
+const panelDengo = new DenGoControllerManager({
+  onNotchChange: (idx, _id, meta) => {
+    sendCmd('setNotch', { index: idx, initialSync: Boolean(meta?.initialSync) });
+  },
+  onAction: (actionId, btnKey) => {
+    sendCmd('dengoAction', { dengoAction: actionId, buttonKey: btnKey });
+  },
+});
+
+function notifyFocusState() {
+  const focused = typeof document.hasFocus === 'function' ? document.hasFocus() : false;
+  sendPacket({ type: 'panel-focus', focused });
+}
+window.addEventListener('focus', notifyFocusState);
+window.addEventListener('blur', notifyFocusState);
 
 function handleTelemetryPacket(data) {
   if (!data || typeof data !== 'object') return;
@@ -67,16 +88,11 @@ if (window.opener && !window.opener.closed) {
     // ignore
   }
 }
+notifyFocusState();
 
 window.addEventListener('beforeunload', () => {
-  if (channel) channel.postMessage({ type: 'panel-bye' });
-  if (window.opener && !window.opener.closed) {
-    try {
-      window.opener.postMessage({ type: 'panel-bye' }, '*');
-    } catch {
-      // ignore
-    }
-  }
+  sendPacket({ type: 'panel-focus', focused: false });
+  sendPacket({ type: 'panel-bye' });
 });
 
 try {
@@ -160,6 +176,10 @@ window.addEventListener('keydown', (e) => {
 
 function renderLoop() {
   requestAnimationFrame(renderLoop);
+
+  if (typeof document.hasFocus === 'function' && document.hasFocus()) {
+    panelDengo.update(performance.now());
+  }
 
   if (performance.now() - lastRxTime > 400) {
     try {
